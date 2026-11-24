@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "legowalkers-sim"
+version = "0.1.0"
+description = "LDraw round-trip validation and MuJoCo evaluation for the F# LegoWalkers compiler"
+requires-python = ">=3.10"
+dependencies = [
+    "lego-technic-sim @ git+https://github.com/yoff/LegoTechnicSimulation.git@1b70ff4b6c567b3c8541d5ef8ff4c56b4be24a5b",
+    "numpy>=1.24,<3",
+    "jsonschema>=4.18,<5",
+]
+
+[project.optional-dependencies]
+physics = ["mujoco==3.2.7"]
+dev = ["pytest>=8,<10"]
+
+[project.scripts]
+legowalkers-sim = "legowalkers_sim.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["simulator"]
+include = ["legowalkers_sim*"]
+
+[tool.setuptools.package-data]
+legowalkers_sim = ["payloads.json", "dashboard.js"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
+markers = ["integration: requires LDRAW_LIBRARY and generated output/integration candidates"]

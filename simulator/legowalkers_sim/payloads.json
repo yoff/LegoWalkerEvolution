@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "pf-aa-reference-estimates-v1",
+  "components": {
+    "8881": {
+      "part": "58119.dat",
+      "massKg": 0.197,
+      "centerLdu": [0, 0, 0],
+      "estimate": true,
+      "description": "59 g catalog set-weight used as an empty-box estimate, plus six 23 g alkaline AA cells. Not a measured assembled weight.",
+      "boundsLdu": [[-110, -89, -40], [110, 70, 40]],
+      "sources": [
+        "https://mybricks.net/set/8881/",
+        "https://data.energizer.com/pdfs/e91-aa-alkaline-power-0120.pdf",
+        "https://library.ldraw.org/library/official/parts/58119.dat"
+      ]
+    },
+    "8884": {
+      "part": "58123.dat",
+      "massKg": 0.024,
+      "centerLdu": [0, -20, 0],
+      "estimate": true,
+      "description": "24 g catalog set-weight used as a conservative receiver estimate; cable mass is included approximately, but flexible cable geometry and forces are not modeled.",
+      "boundsLdu": [[-40, -73.7777, -40], [40, 24, 40]],
+      "sources": [
+        "https://mybricks.net/set/8884/",
+        "https://library.ldraw.org/library/official/parts/58123.dat"
+      ]
+    }
+  },
+  "notes": [
+    "Catalog package dimensions are not treated as component dimensions. Bounds come from the local LDraw geometry at 0.4 mm/LDU.",
+    "Centers of mass and uniform-box component inertias are estimates. Replace masses/centers with measured values in a separate profile; its content hash identifies a different evaluation protocol.",
+    "Wired means ideal external power/control, no onboard electronics payload. Tether drag and electrical torque-speed behavior are not modeled."
+  ]
+}

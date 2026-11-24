@@ -1,0 +1,123 @@
+{
+  "builder": {
+    "catalogue": [
+      {
+        "id": "smooth-passive-pivot",
+        "version": "2",
+        "origin": "hand-authored",
+        "evidence": [
+          "output/realization-quality-v3: rail/crank-pin interference recovered by shorter pin."
+        ],
+        "parameters": [
+          "Pin: 32002.dat / 3673.dat / 32556.dat",
+          "Original or reversed orientation"
+        ],
+        "preconditions": [
+          "Frictionless pivot",
+          "Exact declared-body engagement",
+          "Supported connector contact capacity",
+          "Full modeled socket-wall coverage",
+          "Whole-walker compiler accepts"
+        ],
+        "preserves": [
+          "Motion",
+          "Structural placements",
+          "Shaft midpoint",
+          "Motor settings",
+          "Feet"
+        ],
+        "limitations": [
+          "Contact capacity follows the supported smooth-pin mesh lengths; exact reconstruction remains mandatory.",
+          "Modeled socket-wall coverage is not proof of axial retention.",
+          "Clearance score is a conservative time-zero heuristic, not a collision test."
+        ]
+      },
+      {
+        "id": "passive-link-layer-clearance",
+        "version": "2",
+        "origin": "hand-authored",
+        "evidence": [
+          "output/realization-quality-v3: unintended shaft/coupler rigid merge recovered by +10 LDU shift."
+        ],
+        "parameters": [
+          "Outward-relative depth offsets: +10 / -10 / +20 / -20 LDU"
+        ],
+        "preconditions": [
+          "Feedback implicates a passive link",
+          "No driven/chassis body or rigid mount",
+          "Only smooth incident pivots",
+          "Exact incident-pivot membership",
+          "Full modeled socket-wall coverage and supported contact capacity with existing pins",
+          "Whole-walker compiler accepts"
+        ],
+        "preserves": [
+          "Planar motion",
+          "Part rotations",
+          "Pins",
+          "Motor settings",
+          "Foot attachment with updated depth"
+        ],
+        "limitations": [
+          "Known axial envelopes only.",
+          "Not a spacer, axial-retention, strength or assembly-order certificate."
+        ]
+      }
+    ],
+    "catalogueVersion": "technic-construction-catalogue-v2",
+    "policy": {
+      "schemaVersion": 1,
+      "motifOrder": [
+        "smooth-passive-pivot",
+        "passive-link-layer-clearance"
+      ],
+      "pinOrder": [
+        "32002.dat",
+        "3673.dat",
+        "32556.dat"
+      ],
+      "layerOffsets": [
+        10,
+        -10,
+        20,
+        -20
+      ],
+      "clearanceFirst": true
+    },
+    "policyId": "8d83e7061a7c6833d43d166759e59e41b8f233ef8a02030a62ff14d0f15b6acb",
+    "policyVersion": "symbolic-builder-policy-v1",
+    "promotion": "Manual review required; no automatic catalogue or live-policy promotion.",
+    "schemaVersion": 1,
+    "tieBreak": "Canonical pivot/body ID, configured parameter order, then orientation.",
+    "validation": "Policy orders supported actions; it cannot change hard checks or caller budgets."
+  },
+  "mode": "construction-schematic-not-dynamics",
+  "examples": [
+    {
+      "afterGenotypeId": "1cdb2f887a67c976963a7a4cfa849687657f4e8e5a39d228f25ff2bd7052683a",
+      "beforeGenotypeId": "94c2ead22c0d7065fbb84e59f3a406128bd87b366d43bd0db1a4cc3115af02cc",
+      "caption": "40 to 30 LDU shaft; same midpoint, declared members and motion.",
+      "id": "shorter-pin",
+      "mechanismId": "7165ddb0f4650d4400b66b9bb993f2c5fe16d7b42a20284d37a4756dd7979a27",
+      "motif": "smooth-passive-pivot",
+      "title": "Shorter compatible pin"
+    },
+    {
+      "afterGenotypeId": "953b460bc4c3204d7cec16e928b8a17293c81b83481666baa699855fa6c63595",
+      "beforeGenotypeId": "1cdb2f887a67c976963a7a4cfa849687657f4e8e5a39d228f25ff2bd7052683a",
+      "caption": "Same shaft interval and midpoint; the local pin axis reverses.",
+      "id": "reversed-pin",
+      "mechanismId": "7165ddb0f4650d4400b66b9bb993f2c5fe16d7b42a20284d37a4756dd7979a27",
+      "motif": "smooth-passive-pivot",
+      "title": "Reverse pin orientation"
+    },
+    {
+      "afterGenotypeId": "866b72668b00bf3f276c337e2bcfaec3578138706c24575e09c90e1d704f9612",
+      "beforeGenotypeId": "1cdb2f887a67c976963a7a4cfa849687657f4e8e5a39d228f25ff2bd7052683a",
+      "caption": "+10 LDU depth; existing pins and planar motion stay unchanged.",
+      "id": "layer-clearance",
+      "mechanismId": "7165ddb0f4650d4400b66b9bb993f2c5fe16d7b42a20284d37a4756dd7979a27",
+      "motif": "passive-link-layer-clearance",
+      "title": "Move a passive link outward"
+    }
+  ]
+}

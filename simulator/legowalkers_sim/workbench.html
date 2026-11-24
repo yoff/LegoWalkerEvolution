@@ -1,0 +1,115 @@
+<nav><a href="/">Campaign dashboard</a> &middot; <a href="/forest.html">Campaign ancestry</a> &middot; <a href="/mutation-gallery.html">Mutation examples</a></nav>
+<h1>Breeding workbench</h1>
+<p>Fork, explore, compare, keep and contribute. Nothing here authorizes a simulation.
+Motion diagrams are kinematic; assembly previews are static. Source measurements stay with their original candidate.</p>
+<p id="message" role="status" aria-live="polite">Loading workspaces...</p>
+<section id="contribution-check" class="panel" aria-label="Contribution admission progress" hidden>
+  <h2>Contribution check</h2>
+  <p>You can keep previewing edits and creating draft branches while admission runs.
+    The check belongs to the exact submitted version; later drafts are not included.
+    Checks remain serial. Only discarding that checked version and submitting another contribution must wait.</p>
+  <p id="check-announcement" role="status" aria-live="polite"></p>
+  <p id="check-progress-error" class="error" role="alert"></p>
+  <div id="contribution-check-items"></div>
+</section>
+<section class="panel">
+  <h2>Fork a campaign candidate</h2>
+  <form id="fork-form">
+    <label>Source <select id="source" required></select></label>
+    <label>Workspace name <input id="workspace-name" maxlength="100" required placeholder="My walking experiment"></label>
+    <label>Contributor <input id="author" maxlength="80" required placeholder="Your name or handle"></label>
+    <button>Fork candidate</button>
+  </form>
+</section>
+<section class="panel">
+  <h2>Persistent workspaces and branches</h2>
+  <label>Workspace <select id="workspace"></select></label>
+  <h3>Version tree</h3>
+  <p>Click a version to inspect, edit or contribute it. <strong>Selected</strong> is the version you are working on;
+    <strong>saved head</strong> is a separate bookmark. You can select an intermediate step, not just a branch endpoint.
+    Your selection stays in this page's URL when you reload or share it.</p>
+  <nav id="version-tree" aria-label="Workspace version tree"></nav>
+  <label>Selected version <select id="node"></select></label>
+  <div class="actions">
+    <button id="resume">Resume saved head</button><button id="checkout">Save as current head</button>
+    <button id="undo">Undo to parent</button><button id="keep">Keep this node</button><button id="discard">Discard this node</button>
+  </div>
+  <p id="node-info" role="status" aria-live="polite"></p>
+  <form id="rebase-form">
+    <label>Current campaign family <select id="rebase-source" required></select></label>
+    <button>Rebase selected design onto this family</button>
+  </form>
+  <p>Rebasing creates a new saved version with the selected design unchanged and records the chosen
+    campaign ancestry. It does not apply that campaign candidate's geometry or copy any fitness.
+    Use the design's genuine retained family when recovering provenance from an external construction run.
+    Withdraw an obsolete contribution, then contribute the rebased version.</p>
+  <label>Editing level <select id="level"><option value="">All levels</option><option value="motion">Motion</option><option value="realization">Realization</option><option value="coupled">Coupled</option></select></label>
+  <label>Applicable edit <select id="edit"></select></label>
+  <div class="actions"><button id="preview-option">Show selected option graphically</button>
+    <button id="apply">Create draft branches from selected edit</button></div>
+  <label>Diagram view <select id="diagram-view"><option value="oblique">Oblique (includes depth)</option><option value="front">Front (motion plane)</option></select></label>
+  <p>Browse all edit types below. Related parameter edits share one before/after card with an exact-value selector.
+    Choose a value to load its diagram; previously loaded values switch immediately, and one neighboring value
+    is prepared in the background. Values are discrete generator edits, not interpolated robots.
+    Preparation is serial; creating branches waits for the current preparation to finish.
+    Preview failures and construction rejections remain visible. This does not create branches or run dynamics.
+    Gray: unchanged parts. Orange: previous geometry. Blue: proposed geometry. White circles: hinges. Green: foot contacts and sampled paths.
+    Diagrams use projected convex outlines of real LDraw parts at the initial pose, not photorealistic renders or measured walking.
+    Paired diagrams share the same scale; hover over a part for its identity.</p>
+  <div id="edit-options" aria-label="Graphical mutation options"></div>
+  <p>Availability means the operator can be enumerated, not that its child passes validation.
+  Failed edits remain in the branch history. Keep a child, then edit it again, or return to its parent to branch.</p>
+</section>
+<section id="comparison" class="grid"></section>
+<section class="panel">
+  <h2>Contribute the selected version</h2>
+  <div id="contribution-target" aria-live="polite"></div>
+  <p>The version identified here is submitted exactly as saved, not the saved head or an automatically chosen descendant.
+    Selecting an edit option alone does not change it; create a draft branch first to contribute that edit.</p>
+  <form id="contribute-form">
+    <label>Contribution name <input id="contribution-name" maxlength="100" required></label>
+    <label>Contributor <input id="contribution-author" maxlength="80" required placeholder="Your name or handle"></label>
+    <label>Note <textarea id="note" maxlength="1000" placeholder="What makes this design interesting?"></textarea></label>
+    <button id="contribute-submit">Select a version to contribute</button>
+  </form>
+  <p id="contribution-message" role="status" aria-live="polite"></p>
+  <p>Capacity: 12 active contributions. At the next explicit episode, eligible contributions get a 20% share of non-repair parent-selection opportunities.
+  They are not assigned fitness. Existing gates, trial limits and qualification rules still apply.
+  This is a local shared workbench; contributor names are attribution labels, not authenticated accounts.</p>
+  <h3>User-contributed pool</h3>
+  <div id="pool"></div>
+</section>
+<details><summary>Edit, construction and validation evidence</summary><pre id="evidence"></pre></details>
+<style>
+form{display:flex;gap:12px;flex-wrap:wrap;align-items:end}label{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+select,input,textarea,button{font:inherit;padding:9px;border:1px solid #48607f;border-radius:6px;background:#101723;color:#e2eaf7;max-width:100%}
+select{max-width:min(100%,850px)}button{cursor:pointer}button:disabled{opacity:.45;cursor:wait}
+.actions{display:flex;gap:8px;flex-wrap:wrap}.visuals{display:grid;gap:12px}.visuals img{height:280px;object-fit:contain}
+#version-tree{max-height:340px;overflow:auto;margin:12px 0}
+#version-tree ul{list-style:none;padding-left:22px;margin:5px 0;border-left:1px solid #48607f}
+#version-tree>ul{padding-left:0;border-left:0}
+#version-tree li{margin:5px 0}
+#version-tree button{text-align:left;display:flex;flex-wrap:wrap;gap:8px;align-items:center;width:100%}
+#version-tree button[aria-current="true"]{border:2px solid #72c3ff;background:#183650}
+#version-tree button:focus-visible{outline:2px solid #e2eaf7;outline-offset:2px}
+.version-badge{font-size:.85em;border:1px solid #718aa7;border-radius:4px;padding:1px 5px}
+.version-badge.selected{background:#72c3ff;color:#101723;font-weight:bold}
+#node-info{border-left:4px solid #72c3ff;padding:10px;background:#183650;overflow-wrap:anywhere}
+#contribution-target{border:2px solid #72c3ff;border-radius:6px;padding:12px;overflow-wrap:anywhere}
+#contribution-target img{display:block;width:220px;max-width:100%;height:130px;object-fit:contain}
+.selection-warning{color:#ffce8b}
+#edit-options{display:grid;gap:14px;max-height:850px;overflow:auto;margin-top:12px}
+.edit-option{border:1px solid #48607f;border-radius:8px;padding:12px}.edit-option.selected{border-color:#72c3ff}
+.edit-option h3{margin:0 0 8px}.diagram-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.diagram-pair figure{margin:0;min-width:0}.diagram-pair svg{display:block;width:100%;height:auto;background:#101723}
+.option-status{white-space:pre-wrap}.edit-option pre{max-height:220px;overflow:auto}
+.edit-option select{width:100%}
+@media(max-width:600px){.diagram-pair{grid-template-columns:1fr}}
+#message{padding:10px;min-height:26px}#message.error,#contribution-message.error{color:#ffb3a8;border:1px solid #ffb3a8}pre{white-space:pre-wrap}
+#contribution-check[data-running="true"]{position:sticky;top:8px;z-index:10;max-height:45vh;overflow:auto;border-color:#72c3ff}
+#contribution-check h2,#contribution-check h3{margin:4px 0}
+.check-stages{padding-left:22px}.check-stages .complete{color:#94e9bf}.check-stages .running{color:#72c3ff;font-weight:bold}
+.check-stages .failed,.check-stages .rejected,.check-stages .interrupted,#check-progress-error{color:#ffb3a8}
+.check-outcomes{max-height:180px;overflow:auto;font-size:13px}
+</style>
+<script src="/workbench.js"></script>

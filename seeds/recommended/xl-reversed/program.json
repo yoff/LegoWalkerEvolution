@@ -1,0 +1,1687 @@
+{
+  "program": {
+    "bodies": [
+      {
+        "id": "branch-0--leg-1-brace",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 440,
+            "y": -80,
+            "z": 0
+          },
+          "angle": 1.8245367027907062
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "branch-0--leg-1-crossbar",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 340.0821053542869,
+            "y": 2.56157901571513,
+            "z": 0
+          },
+          "angle": -0.06408332793207003
+        },
+        "sites": [
+          {
+            "id": "drive",
+            "position": {
+              "x": 40,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "left",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "right",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "branch-0--leg-1-long-leg",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 400.0821053542869,
+            "y": -77.43842098428485,
+            "z": 0
+          },
+          "angle": 1.8245367027907056
+        },
+        "sites": [
+          {
+            "id": "drive",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 200,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "branch-0--leg-1-short-leg",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 340.0821053542869,
+            "y": 2.5615790157151297,
+            "z": 0
+          },
+          "angle": 1.8245367027907053
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 120,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "branch-0--leg-1-sole",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 309.9589473228566,
+            "y": 118.71921049214237,
+            "z": 0
+          },
+          "angle": -0.06408332793206999
+        },
+        "sites": [
+          {
+            "id": "contact",
+            "position": {
+              "x": 20,
+              "y": 14,
+              "z": 0
+            }
+          },
+          {
+            "id": "left",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "right",
+            "position": {
+              "x": 40,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "branch-0--leg-1-upper",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 440,
+            "y": -80,
+            "z": 0
+          },
+          "angle": 3.0775093256577235
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 40,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "branch-1--leg-0-brace",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 440,
+            "y": -80,
+            "z": 0
+          },
+          "angle": 1.3191416343123483
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "branch-1--leg-0-crossbar",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 380.0794502458783,
+            "y": 2.5198625614696217,
+            "z": 0
+          },
+          "angle": -0.06303830630714465
+        },
+        "sites": [
+          {
+            "id": "drive",
+            "position": {
+              "x": 40,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "left",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "right",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "branch-1--leg-0-long-leg",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 400.0794502458783,
+            "y": -77.4801374385304,
+            "z": 0
+          },
+          "angle": 1.319141634312348
+        },
+        "sites": [
+          {
+            "id": "drive",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 200,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "branch-1--leg-0-short-leg",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 380.0794502458783,
+            "y": 2.5198625614696217,
+            "z": 0
+          },
+          "angle": 1.3191416343123479
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 120,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "branch-1--leg-0-sole",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 409.9602748770609,
+            "y": 118.74006871926524,
+            "z": 0
+          },
+          "angle": -0.06303830630714469
+        },
+        "sites": [
+          {
+            "id": "contact",
+            "position": {
+              "x": 20,
+              "y": 14,
+              "z": 0
+            }
+          },
+          {
+            "id": "left",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "right",
+            "position": {
+              "x": 40,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "branch-1--leg-0-upper",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 440,
+            "y": -80,
+            "z": 0
+          },
+          "angle": 3.0785543472826484
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 40,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "chassis",
+        "grounded": true,
+        "initial": {
+          "origin": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "angle": 0
+        },
+        "sites": [
+          {
+            "id": "bearing-0",
+            "position": {
+              "x": 40,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "bearing-1",
+            "position": {
+              "x": 100,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "bearing-2",
+            "position": {
+              "x": 160,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "bearing-3",
+            "position": {
+              "x": 220,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "bearing-4",
+            "position": {
+              "x": 280,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "bearing-5",
+            "position": {
+              "x": 340,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "bearing-6",
+            "position": {
+              "x": 400,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "branch-0--leg-1-upper",
+            "position": {
+              "x": 440,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "branch-1--leg-0-upper",
+            "position": {
+              "x": 440,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "constructed-bearing-constructed-shaft-280--60",
+            "position": {
+              "x": 280,
+              "y": -60,
+              "z": 0
+            }
+          },
+          {
+            "id": "constructed-bearing-shaft-2",
+            "position": {
+              "x": 160,
+              "y": -2.342621395506428e-15,
+              "z": 0
+            }
+          },
+          {
+            "id": "constructed-bearing-shaft-3",
+            "position": {
+              "x": 220,
+              "y": -2.342621395506428e-15,
+              "z": 0
+            }
+          },
+          {
+            "id": "constructed-bearing-shaft-4",
+            "position": {
+              "x": 280,
+              "y": -2.342621395506428e-15,
+              "z": 0
+            }
+          },
+          {
+            "id": "constructed-bearing-shaft-5",
+            "position": {
+              "x": 340,
+              "y": -2.342621395506428e-15,
+              "z": 0
+            }
+          },
+          {
+            "id": "constructed-bearing-shaft-6",
+            "position": {
+              "x": 400,
+              "y": -2.342621395506428e-15,
+              "z": 0
+            }
+          },
+          {
+            "id": "leg-0-upper",
+            "position": {
+              "x": 200,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "leg-1-upper",
+            "position": {
+              "x": 200,
+              "y": -80,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "constructed-shaft-280--60",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 280,
+            "y": -60,
+            "z": 0
+          },
+          "angle": 0.130899693899574
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "leg-0-brace",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 200,
+            "y": -80,
+            "z": 0
+          },
+          "angle": 1.8245367027907058
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "leg-0-crossbar",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 100.08210535428692,
+            "y": 2.5615790157151452,
+            "z": 0
+          },
+          "angle": -0.06408332793207015
+        },
+        "sites": [
+          {
+            "id": "drive",
+            "position": {
+              "x": 40,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "left",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "right",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "leg-0-long-leg",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 160.0821053542869,
+            "y": -77.43842098428483,
+            "z": 0
+          },
+          "angle": 1.8245367027907058
+        },
+        "sites": [
+          {
+            "id": "drive",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 200,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "leg-0-short-leg",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 100.08210535428692,
+            "y": 2.561579015715145,
+            "z": 0
+          },
+          "angle": 1.8245367027907058
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 120,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "leg-0-sole",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 69.95894732285656,
+            "y": 118.71921049214237,
+            "z": 0
+          },
+          "angle": -0.0640833279320702
+        },
+        "sites": [
+          {
+            "id": "contact",
+            "position": {
+              "x": 20,
+              "y": 14,
+              "z": 0
+            }
+          },
+          {
+            "id": "left",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "right",
+            "position": {
+              "x": 40,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "leg-0-upper",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 200,
+            "y": -80,
+            "z": 0
+          },
+          "angle": 3.077509325657723
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 40,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "leg-1-brace",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 200,
+            "y": -80,
+            "z": 0
+          },
+          "angle": 1.319141634312348
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "leg-1-crossbar",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 140.07945024587835,
+            "y": 2.519862561469614,
+            "z": 0
+          },
+          "angle": -0.06303830630714469
+        },
+        "sites": [
+          {
+            "id": "drive",
+            "position": {
+              "x": 40,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "left",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "right",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "leg-1-long-leg",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 160.07945024587835,
+            "y": -77.4801374385304,
+            "z": 0
+          },
+          "angle": 1.3191416343123485
+        },
+        "sites": [
+          {
+            "id": "drive",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 200,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "leg-1-short-leg",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 140.07945024587835,
+            "y": 2.519862561469614,
+            "z": 0
+          },
+          "angle": 1.3191416343123488
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 120,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "leg-1-sole",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 169.9602748770608,
+            "y": 118.74006871926525,
+            "z": 0
+          },
+          "angle": -0.06303830630714462
+        },
+        "sites": [
+          {
+            "id": "contact",
+            "position": {
+              "x": 20,
+              "y": 14,
+              "z": 0
+            }
+          },
+          {
+            "id": "left",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "right",
+            "position": {
+              "x": 40,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "leg-1-upper",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 200,
+            "y": -80,
+            "z": 0
+          },
+          "angle": 3.078554347282649
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 40,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "shaft-2",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 160,
+            "y": -2.342621395506428e-15,
+            "z": 0
+          },
+          "angle": 6.896926570553999e-16
+        },
+        "sites": [
+          {
+            "id": "leg-0-root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "leg-0-tip",
+            "position": {
+              "x": -20,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "leg-1-root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "leg-1-tip",
+            "position": {
+              "x": 20,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "shaft-3",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 220,
+            "y": -2.342621395506428e-15,
+            "z": 0
+          },
+          "angle": 0.130899693899574
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "shaft-4",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 280,
+            "y": -2.342621395506428e-15,
+            "z": 0
+          },
+          "angle": 6.938893903907228e-16
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "shaft-5",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 340,
+            "y": -2.342621395506428e-15,
+            "z": 0
+          },
+          "angle": 0.130899693899574
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "shaft-6",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 400,
+            "y": -2.342621395506428e-15,
+            "z": 0
+          },
+          "angle": 6.938893903907228e-16
+        },
+        "sites": [
+          {
+            "id": "branch-0--leg-1-tip",
+            "position": {
+              "x": -20,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "branch-1--leg-0-tip",
+            "position": {
+              "x": 20,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      }
+    ],
+    "hinges": [
+      {
+        "id": "branch-0--leg-1-brace-crossbar",
+        "a": {
+          "body": "branch-0--leg-1-brace",
+          "site": "tip"
+        },
+        "b": {
+          "body": "branch-0--leg-1-crossbar",
+          "site": "right"
+        }
+      },
+      {
+        "id": "branch-0--leg-1-crossbar-short-leg",
+        "a": {
+          "body": "branch-0--leg-1-crossbar",
+          "site": "left"
+        },
+        "b": {
+          "body": "branch-0--leg-1-short-leg",
+          "site": "root"
+        }
+      },
+      {
+        "id": "branch-0--leg-1-drive-crossbar",
+        "a": {
+          "body": "branch-0--leg-1-crossbar",
+          "site": "drive"
+        },
+        "b": {
+          "body": "shaft-6",
+          "site": "branch-0--leg-1-tip"
+        }
+      },
+      {
+        "id": "branch-0--leg-1-drive-long-leg",
+        "a": {
+          "body": "branch-0--leg-1-long-leg",
+          "site": "drive"
+        },
+        "b": {
+          "body": "shaft-6",
+          "site": "branch-0--leg-1-tip"
+        }
+      },
+      {
+        "id": "branch-0--leg-1-long-leg-sole",
+        "a": {
+          "body": "branch-0--leg-1-long-leg",
+          "site": "tip"
+        },
+        "b": {
+          "body": "branch-0--leg-1-sole",
+          "site": "right"
+        }
+      },
+      {
+        "id": "branch-0--leg-1-shared-upper-pivot",
+        "a": {
+          "body": "branch-0--leg-1-brace",
+          "site": "root"
+        },
+        "b": {
+          "body": "branch-0--leg-1-upper",
+          "site": "root"
+        }
+      },
+      {
+        "id": "branch-0--leg-1-short-leg-sole",
+        "a": {
+          "body": "branch-0--leg-1-short-leg",
+          "site": "tip"
+        },
+        "b": {
+          "body": "branch-0--leg-1-sole",
+          "site": "left"
+        }
+      },
+      {
+        "id": "branch-0--leg-1-upper-ground",
+        "a": {
+          "body": "branch-0--leg-1-upper",
+          "site": "root"
+        },
+        "b": {
+          "body": "chassis",
+          "site": "branch-0--leg-1-upper"
+        }
+      },
+      {
+        "id": "branch-0--leg-1-upper-long-leg",
+        "a": {
+          "body": "branch-0--leg-1-long-leg",
+          "site": "root"
+        },
+        "b": {
+          "body": "branch-0--leg-1-upper",
+          "site": "tip"
+        }
+      },
+      {
+        "id": "branch-1--leg-0-brace-crossbar",
+        "a": {
+          "body": "branch-1--leg-0-brace",
+          "site": "tip"
+        },
+        "b": {
+          "body": "branch-1--leg-0-crossbar",
+          "site": "right"
+        }
+      },
+      {
+        "id": "branch-1--leg-0-crossbar-short-leg",
+        "a": {
+          "body": "branch-1--leg-0-crossbar",
+          "site": "left"
+        },
+        "b": {
+          "body": "branch-1--leg-0-short-leg",
+          "site": "root"
+        }
+      },
+      {
+        "id": "branch-1--leg-0-drive-crossbar",
+        "a": {
+          "body": "branch-1--leg-0-crossbar",
+          "site": "drive"
+        },
+        "b": {
+          "body": "shaft-6",
+          "site": "branch-1--leg-0-tip"
+        }
+      },
+      {
+        "id": "branch-1--leg-0-drive-long-leg",
+        "a": {
+          "body": "branch-1--leg-0-long-leg",
+          "site": "drive"
+        },
+        "b": {
+          "body": "shaft-6",
+          "site": "branch-1--leg-0-tip"
+        }
+      },
+      {
+        "id": "branch-1--leg-0-long-leg-sole",
+        "a": {
+          "body": "branch-1--leg-0-long-leg",
+          "site": "tip"
+        },
+        "b": {
+          "body": "branch-1--leg-0-sole",
+          "site": "right"
+        }
+      },
+      {
+        "id": "branch-1--leg-0-shared-upper-pivot",
+        "a": {
+          "body": "branch-1--leg-0-brace",
+          "site": "root"
+        },
+        "b": {
+          "body": "branch-1--leg-0-upper",
+          "site": "root"
+        }
+      },
+      {
+        "id": "branch-1--leg-0-short-leg-sole",
+        "a": {
+          "body": "branch-1--leg-0-short-leg",
+          "site": "tip"
+        },
+        "b": {
+          "body": "branch-1--leg-0-sole",
+          "site": "left"
+        }
+      },
+      {
+        "id": "branch-1--leg-0-upper-ground",
+        "a": {
+          "body": "branch-1--leg-0-upper",
+          "site": "root"
+        },
+        "b": {
+          "body": "chassis",
+          "site": "branch-1--leg-0-upper"
+        }
+      },
+      {
+        "id": "branch-1--leg-0-upper-long-leg",
+        "a": {
+          "body": "branch-1--leg-0-long-leg",
+          "site": "root"
+        },
+        "b": {
+          "body": "branch-1--leg-0-upper",
+          "site": "tip"
+        }
+      },
+      {
+        "id": "constructed-bearing-constructed-shaft-280--60",
+        "a": {
+          "body": "chassis",
+          "site": "constructed-bearing-constructed-shaft-280--60"
+        },
+        "b": {
+          "body": "constructed-shaft-280--60",
+          "site": "root"
+        }
+      },
+      {
+        "id": "constructed-bearing-shaft-2",
+        "a": {
+          "body": "chassis",
+          "site": "constructed-bearing-shaft-2"
+        },
+        "b": {
+          "body": "shaft-2",
+          "site": "root"
+        }
+      },
+      {
+        "id": "constructed-bearing-shaft-3",
+        "a": {
+          "body": "chassis",
+          "site": "constructed-bearing-shaft-3"
+        },
+        "b": {
+          "body": "shaft-3",
+          "site": "root"
+        }
+      },
+      {
+        "id": "constructed-bearing-shaft-4",
+        "a": {
+          "body": "chassis",
+          "site": "constructed-bearing-shaft-4"
+        },
+        "b": {
+          "body": "shaft-4",
+          "site": "root"
+        }
+      },
+      {
+        "id": "constructed-bearing-shaft-5",
+        "a": {
+          "body": "chassis",
+          "site": "constructed-bearing-shaft-5"
+        },
+        "b": {
+          "body": "shaft-5",
+          "site": "root"
+        }
+      },
+      {
+        "id": "constructed-bearing-shaft-6",
+        "a": {
+          "body": "chassis",
+          "site": "constructed-bearing-shaft-6"
+        },
+        "b": {
+          "body": "shaft-6",
+          "site": "root"
+        }
+      },
+      {
+        "id": "leg-0-brace-crossbar",
+        "a": {
+          "body": "leg-0-brace",
+          "site": "tip"
+        },
+        "b": {
+          "body": "leg-0-crossbar",
+          "site": "right"
+        }
+      },
+      {
+        "id": "leg-0-crossbar-short-leg",
+        "a": {
+          "body": "leg-0-crossbar",
+          "site": "left"
+        },
+        "b": {
+          "body": "leg-0-short-leg",
+          "site": "root"
+        }
+      },
+      {
+        "id": "leg-0-drive-crossbar",
+        "a": {
+          "body": "leg-0-crossbar",
+          "site": "drive"
+        },
+        "b": {
+          "body": "shaft-2",
+          "site": "leg-0-tip"
+        }
+      },
+      {
+        "id": "leg-0-drive-long-leg",
+        "a": {
+          "body": "leg-0-long-leg",
+          "site": "drive"
+        },
+        "b": {
+          "body": "shaft-2",
+          "site": "leg-0-tip"
+        }
+      },
+      {
+        "id": "leg-0-long-leg-sole",
+        "a": {
+          "body": "leg-0-long-leg",
+          "site": "tip"
+        },
+        "b": {
+          "body": "leg-0-sole",
+          "site": "right"
+        }
+      },
+      {
+        "id": "leg-0-shared-upper-pivot",
+        "a": {
+          "body": "leg-0-brace",
+          "site": "root"
+        },
+        "b": {
+          "body": "leg-0-upper",
+          "site": "root"
+        }
+      },
+      {
+        "id": "leg-0-short-leg-sole",
+        "a": {
+          "body": "leg-0-short-leg",
+          "site": "tip"
+        },
+        "b": {
+          "body": "leg-0-sole",
+          "site": "left"
+        }
+      },
+      {
+        "id": "leg-0-upper-ground",
+        "a": {
+          "body": "chassis",
+          "site": "leg-0-upper"
+        },
+        "b": {
+          "body": "leg-0-upper",
+          "site": "root"
+        }
+      },
+      {
+        "id": "leg-0-upper-long-leg",
+        "a": {
+          "body": "leg-0-long-leg",
+          "site": "root"
+        },
+        "b": {
+          "body": "leg-0-upper",
+          "site": "tip"
+        }
+      },
+      {
+        "id": "leg-1-brace-crossbar",
+        "a": {
+          "body": "leg-1-brace",
+          "site": "tip"
+        },
+        "b": {
+          "body": "leg-1-crossbar",
+          "site": "right"
+        }
+      },
+      {
+        "id": "leg-1-crossbar-short-leg",
+        "a": {
+          "body": "leg-1-crossbar",
+          "site": "left"
+        },
+        "b": {
+          "body": "leg-1-short-leg",
+          "site": "root"
+        }
+      },
+      {
+        "id": "leg-1-drive-crossbar",
+        "a": {
+          "body": "leg-1-crossbar",
+          "site": "drive"
+        },
+        "b": {
+          "body": "shaft-2",
+          "site": "leg-1-tip"
+        }
+      },
+      {
+        "id": "leg-1-drive-long-leg",
+        "a": {
+          "body": "leg-1-long-leg",
+          "site": "drive"
+        },
+        "b": {
+          "body": "shaft-2",
+          "site": "leg-1-tip"
+        }
+      },
+      {
+        "id": "leg-1-long-leg-sole",
+        "a": {
+          "body": "leg-1-long-leg",
+          "site": "tip"
+        },
+        "b": {
+          "body": "leg-1-sole",
+          "site": "right"
+        }
+      },
+      {
+        "id": "leg-1-shared-upper-pivot",
+        "a": {
+          "body": "leg-1-brace",
+          "site": "root"
+        },
+        "b": {
+          "body": "leg-1-upper",
+          "site": "root"
+        }
+      },
+      {
+        "id": "leg-1-short-leg-sole",
+        "a": {
+          "body": "leg-1-short-leg",
+          "site": "tip"
+        },
+        "b": {
+          "body": "leg-1-sole",
+          "site": "left"
+        }
+      },
+      {
+        "id": "leg-1-upper-ground",
+        "a": {
+          "body": "chassis",
+          "site": "leg-1-upper"
+        },
+        "b": {
+          "body": "leg-1-upper",
+          "site": "root"
+        }
+      },
+      {
+        "id": "leg-1-upper-long-leg",
+        "a": {
+          "body": "leg-1-long-leg",
+          "site": "root"
+        },
+        "b": {
+          "body": "leg-1-upper",
+          "site": "tip"
+        }
+      }
+    ],
+    "motor": {
+      "body": "constructed-shaft-280--60",
+      "phase": 0.130899693899574
+    },
+    "transmissions": [
+      {
+        "input": "constructed-shaft-280--60",
+        "output": "shaft-4",
+        "ratio": -1,
+        "phase": 0.1308996938995747
+      },
+      {
+        "input": "shaft-3",
+        "output": "shaft-2",
+        "ratio": -1,
+        "phase": 0.1308996938995747
+      },
+      {
+        "input": "shaft-4",
+        "output": "shaft-3",
+        "ratio": -1,
+        "phase": 0.1308996938995747
+      },
+      {
+        "input": "shaft-4",
+        "output": "shaft-5",
+        "ratio": -1,
+        "phase": 0.1308996938995747
+      },
+      {
+        "input": "shaft-5",
+        "output": "shaft-6",
+        "ratio": -1,
+        "phase": 0.1308996938995747
+      }
+    ],
+    "feet": [
+      {
+        "id": "branch-0--leg-1",
+        "port": {
+          "body": "branch-0--leg-1-sole",
+          "site": "contact"
+        },
+        "radius": 4
+      },
+      {
+        "id": "branch-1--leg-0",
+        "port": {
+          "body": "branch-1--leg-0-sole",
+          "site": "contact"
+        },
+        "radius": 4
+      },
+      {
+        "id": "leg-0",
+        "port": {
+          "body": "leg-0-sole",
+          "site": "contact"
+        },
+        "radius": 4
+      },
+      {
+        "id": "leg-1",
+        "port": {
+          "body": "leg-1-sole",
+          "site": "contact"
+        },
+        "radius": 4
+      }
+    ]
+  },
+  "schemaVersion": 1
+}

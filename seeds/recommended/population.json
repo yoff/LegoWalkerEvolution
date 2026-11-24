@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "description": "Portable active kept contributions, not a local campaign archive or imported fitness.",
+  "qualification": "Historical source observations are descriptive only. Rebuilt hardware must earn fresh local qualification.",
+  "seeds": [
+    {
+      "id": "four-long",
+      "label": "Four long",
+      "directory": "four-long",
+      "logicalFeet": 4,
+      "notes": "Exploratory long-stride four-bar motion; not a qualified starting assembly.",
+      "sha256": {
+        "program.json": "6a18ffa7df7c1cc7ff99e8b8870c73b4583232b38d38251800a334bf51cbbde8",
+        "realization.json": "f1b882ed7c0c8aa9fae9f6cf9aec3e576d10c15ee5faadceb1f0a6aae5a40c1c"
+      }
+    },
+    {
+      "id": "four-longer",
+      "label": "Four longer",
+      "directory": "four-longer",
+      "logicalFeet": 4,
+      "notes": "Longer four-bar motion; current rebuilt hardware still needs partition repair.",
+      "sha256": {
+        "program.json": "72d75d8c338d8843c921fcc66a02bbabd0026804cfeb4dd3c4255fd356e28cb7",
+        "realization.json": "e0bfc21c2be3f79c265a2cff942b0968bceca44065ba19f2d4a21619a64501bd"
+      }
+    },
+    {
+      "id": "gallop",
+      "label": "Gallop",
+      "directory": "gallop",
+      "logicalFeet": 4,
+      "notes": "Four-foot gait with single brick soles; current ground-aware search can exhaust its time bound.",
+      "sha256": {
+        "program.json": "3e9174f3ec95b4f69d8d992ccb9ce984620e390e0a3e4af817d49bf1f92be045",
+        "realization.json": "995a503c49e18313d94012bdc8f404e640fb7e84a2f5d1d0ab2d512e12ee9d47"
+      }
+    },
+    {
+      "id": "trudge-original",
+      "label": "Trudge original",
+      "directory": "trudge-original",
+      "logicalFeet": 4,
+      "notes": "Earlier Trudge motion and layout, retained for diversity; not a qualification claim.",
+      "sha256": {
+        "program.json": "c74151e8646c9cd624360567c21d850833feed41e84044b472c5efd711edb6bd",
+        "realization.json": "3b60355072b0ee8a0e06039e8a108f7de467a92c7acfc36a03bef3aa80cbf047"
+      }
+    },
+    {
+      "id": "xl-reversed",
+      "label": "XL reversed",
+      "directory": "xl-reversed",
+      "logicalFeet": 4,
+      "notes": "Reversed electrical polarity is intentional; historic success does not transfer to rebuilt hardware.",
+      "sha256": {
+        "program.json": "adeb089ebba9e3559c29700d1c5ff5e5e34e57367f4baa4e28359c7f1d96fbec",
+        "realization.json": "05deff641550fa1a385ed0b56c09d9395d57638aef0b16404311a5464b56a319"
+      }
+    },
+    {
+      "id": "outward-l",
+      "label": "Outward L",
+      "directory": "outward-l",
+      "logicalFeet": 4,
+      "notes": "Outward L foot geometry with retained knee motion; exploratory predecessor.",
+      "sha256": {
+        "program.json": "87a8e666cf30fa8b0da0c54b196b4e6dc82ca29a13a023bb15897865695f7191",
+        "realization.json": "dd7f5cd9032a3995d2791d25aec568e24a037f22bca35217bb4a7363bfc36a0b"
+      }
+    },
+    {
+      "id": "trudge-balanced",
+      "label": "Trudge balanced",
+      "directory": "trudge-balanced",
+      "logicalFeet": 4,
+      "notes": "Source assembly passed a bounded corrected-simulator walking test: about 11.43 cm forward and five repeatable cycles. Negative speed is intentional. Its one-layer non-foot margin is below the current 8 LDU nominal reconstruction requirement.",
+      "sha256": {
+        "program.json": "a6678f034df31868246461b8365b401b94006c732c9d9575c842bc67a82d763f",
+        "realization.json": "a4fab41723ce2efe54bd9c03b429ab4852dbf68e8ee754883d15ffd9cb8cb1c3"
+      }
+    },
+    {
+      "id": "l-balanced",
+      "label": "L balanced",
+      "directory": "l-balanced",
+      "logicalFeet": 4,
+      "notes": "Source assembly passed a bounded corrected-simulator walking test: about 91.29 cm forward and fifteen repeatable cycles. Positive speed is intentional. New builds still require exact admission and fresh qualification.",
+      "sha256": {
+        "program.json": "130b50787b0a556fe02cecbdc5b8a1535cc1a3df28a6fdb730e727696b16e0f0",
+        "realization.json": "c657e0672f17f6c6bbca30d335a766c671496ee575e43e628f9893f73f121c2d"
+      }
+    }
+  ]
+}

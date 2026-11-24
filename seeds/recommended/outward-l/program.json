@@ -1,0 +1,1815 @@
+{
+  "program": {
+    "bodies": [
+      {
+        "id": "chassis",
+        "grounded": true,
+        "initial": {
+          "origin": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "angle": 0
+        },
+        "sites": [
+          {
+            "id": "bearing-0",
+            "position": {
+              "x": 40,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "bearing-1",
+            "position": {
+              "x": 100,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "bearing-2",
+            "position": {
+              "x": 160,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "bearing-3",
+            "position": {
+              "x": 220,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "bearing-4",
+            "position": {
+              "x": 280,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "bearing-5",
+            "position": {
+              "x": 340,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "bearing-6",
+            "position": {
+              "x": 400,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "branch-0--leg-1-upper",
+            "position": {
+              "x": 440,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "branch-1--leg-0-upper",
+            "position": {
+              "x": 440,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "constructed-bearing-constructed-shaft-280--60",
+            "position": {
+              "x": 280,
+              "y": -60,
+              "z": 0
+            }
+          },
+          {
+            "id": "constructed-bearing-shaft-2",
+            "position": {
+              "x": 160,
+              "y": -2.342621395506428e-15,
+              "z": 0
+            }
+          },
+          {
+            "id": "constructed-bearing-shaft-3",
+            "position": {
+              "x": 220,
+              "y": -2.342621395506428e-15,
+              "z": 0
+            }
+          },
+          {
+            "id": "constructed-bearing-shaft-4",
+            "position": {
+              "x": 280,
+              "y": -2.342621395506428e-15,
+              "z": 0
+            }
+          },
+          {
+            "id": "constructed-bearing-shaft-5",
+            "position": {
+              "x": 340,
+              "y": -2.342621395506428e-15,
+              "z": 0
+            }
+          },
+          {
+            "id": "constructed-bearing-shaft-6",
+            "position": {
+              "x": 400,
+              "y": -2.342621395506428e-15,
+              "z": 0
+            }
+          },
+          {
+            "id": "leg-0-upper",
+            "position": {
+              "x": 200,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "leg-1-upper",
+            "position": {
+              "x": 200,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-branch-0--leg-1-lower",
+            "position": {
+              "x": 440,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-branch-0--leg-1-replacement-1-lower",
+            "position": {
+              "x": 440,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-branch-0--leg-1-replacement-1-upper",
+            "position": {
+              "x": 440,
+              "y": -160,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-branch-0--leg-1-upper",
+            "position": {
+              "x": 440,
+              "y": -120,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-branch-1--leg-0-lower",
+            "position": {
+              "x": 440,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-branch-1--leg-0-replacement-1-lower",
+            "position": {
+              "x": 440,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-branch-1--leg-0-replacement-1-upper",
+            "position": {
+              "x": 440,
+              "y": -160,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-branch-1--leg-0-upper",
+            "position": {
+              "x": 440,
+              "y": -120,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-leg-0-lower",
+            "position": {
+              "x": 200,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-leg-0-replacement-1-lower",
+            "position": {
+              "x": 200,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-leg-0-replacement-1-upper",
+            "position": {
+              "x": 200,
+              "y": -160,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-leg-0-upper",
+            "position": {
+              "x": 200,
+              "y": -120,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-leg-1-lower",
+            "position": {
+              "x": 200,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-leg-1-replacement-1-lower",
+            "position": {
+              "x": 200,
+              "y": -80,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-leg-1-replacement-1-upper",
+            "position": {
+              "x": 200,
+              "y": -160,
+              "z": 0
+            }
+          },
+          {
+            "id": "level-foot-leg-1-upper",
+            "position": {
+              "x": 200,
+              "y": -120,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "constructed-shaft-280--60",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 280,
+            "y": -60,
+            "z": 0
+          },
+          "angle": 0.130899693899574
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-leg-a",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 440,
+            "y": -80,
+            "z": 0
+          },
+          "angle": 3.109962229446046
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-leg-b",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 380,
+            "y": -1.7656896191214227e-14,
+            "z": 0
+          },
+          "angle": -1.8229600118594778
+        },
+        "sites": [
+          {
+            "id": "bottom",
+            "position": {
+              "x": -120,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-sole-output",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 409.93997598078084,
+            "y": 116.20498198558556,
+            "z": 0
+          },
+          "angle": 0
+        },
+        "sites": [
+          {
+            "id": "contact",
+            "position": {
+              "x": -20,
+              "y": 14,
+              "z": 0
+            }
+          },
+          {
+            "id": "left",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "right",
+            "position": {
+              "x": -40,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-sole-parallel",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 320.0400160128128,
+            "y": -77.4699879903904,
+            "z": 0
+          },
+          "angle": 1.3186326417303156
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 200.00000000000003,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-upper-output",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 360.0400160128128,
+            "y": -77.4699879903904,
+            "z": 0
+          },
+          "angle": 0
+        },
+        "sites": [
+          {
+            "id": "corner",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "toe",
+            "position": {
+              "x": -40,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "top",
+            "position": {
+              "x": 0,
+              "y": -80,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-upper-parallel",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 440,
+            "y": -160,
+            "z": 0
+          },
+          "angle": 3.109962229446046
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 79.99999999999999,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-leg-a",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 440,
+            "y": -80,
+            "z": 0
+          },
+          "angle": 2.8451107270893554
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-leg-b",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 420,
+            "y": 1.1535166412308029e-14,
+            "z": 0
+          },
+          "angle": -2.355153400835627
+        },
+        "sites": [
+          {
+            "id": "bottom",
+            "position": {
+              "x": -120,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-sole-output",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 504.7644284124887,
+            "y": 84.94110710312223,
+            "z": 0
+          },
+          "angle": 0
+        },
+        "sites": [
+          {
+            "id": "contact",
+            "position": {
+              "x": -20,
+              "y": 14,
+              "z": 0
+            }
+          },
+          {
+            "id": "left",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "right",
+            "position": {
+              "x": -40,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-sole-parallel",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 323.49038105834086,
+            "y": -56.62740473541478,
+            "z": 0
+          },
+          "angle": 0.7864392527541664
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 200.00000000000003,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-upper-output",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 363.49038105834086,
+            "y": -56.62740473541478,
+            "z": 0
+          },
+          "angle": 0
+        },
+        "sites": [
+          {
+            "id": "corner",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "toe",
+            "position": {
+              "x": -40,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "top",
+            "position": {
+              "x": 0,
+              "y": -80,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-upper-parallel",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 440,
+            "y": -160,
+            "z": 0
+          },
+          "angle": 2.8451107270893554
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 79.99999999999999,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-leg-a",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 200,
+            "y": -80,
+            "z": 0
+          },
+          "angle": 3.109962229446046
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-leg-b",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 140,
+            "y": -1.7656896191214227e-14,
+            "z": 0
+          },
+          "angle": -1.8229600118594773
+        },
+        "sites": [
+          {
+            "id": "bottom",
+            "position": {
+              "x": -120,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-sole-output",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 169.9399759807808,
+            "y": 116.20498198558558,
+            "z": 0
+          },
+          "angle": 0
+        },
+        "sites": [
+          {
+            "id": "contact",
+            "position": {
+              "x": -20,
+              "y": 14,
+              "z": 0
+            }
+          },
+          {
+            "id": "left",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "right",
+            "position": {
+              "x": -40,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-sole-parallel",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 80.04001601281281,
+            "y": -77.4699879903904,
+            "z": 0
+          },
+          "angle": 1.318632641730316
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 200.00000000000003,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-upper-output",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 120.04001601281281,
+            "y": -77.4699879903904,
+            "z": 0
+          },
+          "angle": 0
+        },
+        "sites": [
+          {
+            "id": "corner",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "toe",
+            "position": {
+              "x": -40,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "top",
+            "position": {
+              "x": 0,
+              "y": -80,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-upper-parallel",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 200,
+            "y": -160,
+            "z": 0
+          },
+          "angle": 3.109962229446046
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-leg-a",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 200,
+            "y": -80,
+            "z": 0
+          },
+          "angle": 2.8451107270893554
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-leg-b",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 180,
+            "y": 1.1451231745601569e-14,
+            "z": 0
+          },
+          "angle": -2.355153400835627
+        },
+        "sites": [
+          {
+            "id": "bottom",
+            "position": {
+              "x": -120,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-sole-output",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 264.7644284124887,
+            "y": 84.94110710312223,
+            "z": 0
+          },
+          "angle": 0
+        },
+        "sites": [
+          {
+            "id": "contact",
+            "position": {
+              "x": -20,
+              "y": 14,
+              "z": 0
+            }
+          },
+          {
+            "id": "left",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "right",
+            "position": {
+              "x": -40,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-sole-parallel",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 83.49038105834084,
+            "y": -56.62740473541478,
+            "z": 0
+          },
+          "angle": 0.7864392527541664
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 200.00000000000003,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-upper-output",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 123.49038105834084,
+            "y": -56.62740473541478,
+            "z": 0
+          },
+          "angle": 0
+        },
+        "sites": [
+          {
+            "id": "corner",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "toe",
+            "position": {
+              "x": -40,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "top",
+            "position": {
+              "x": 0,
+              "y": -80,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-upper-parallel",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 200,
+            "y": -160,
+            "z": 0
+          },
+          "angle": 2.8451107270893554
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "tip",
+            "position": {
+              "x": 80,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "shaft-2",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 160,
+            "y": -2.342621395506428e-15,
+            "z": 0
+          },
+          "angle": 6.896926570553999e-16
+        },
+        "sites": [
+          {
+            "id": "leg-0-root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "leg-0-tip",
+            "position": {
+              "x": -20,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "leg-1-root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "leg-1-tip",
+            "position": {
+              "x": 20,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "shaft-3",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 220,
+            "y": -2.342621395506428e-15,
+            "z": 0
+          },
+          "angle": 0.130899693899574
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "shaft-4",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 280,
+            "y": -2.342621395506428e-15,
+            "z": 0
+          },
+          "angle": 6.938893903907228e-16
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "shaft-5",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 340,
+            "y": -2.342621395506428e-15,
+            "z": 0
+          },
+          "angle": 0.130899693899574
+        },
+        "sites": [
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "shaft-6",
+        "grounded": false,
+        "initial": {
+          "origin": {
+            "x": 400,
+            "y": -2.342621395506428e-15,
+            "z": 0
+          },
+          "angle": 6.938893903907228e-16
+        },
+        "sites": [
+          {
+            "id": "branch-0--leg-1-tip",
+            "position": {
+              "x": -20,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "branch-1--leg-0-tip",
+            "position": {
+              "x": 20,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "id": "root",
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ]
+      }
+    ],
+    "hinges": [
+      {
+        "id": "constructed-bearing-constructed-shaft-280--60",
+        "a": {
+          "body": "chassis",
+          "site": "constructed-bearing-constructed-shaft-280--60"
+        },
+        "b": {
+          "body": "constructed-shaft-280--60",
+          "site": "root"
+        }
+      },
+      {
+        "id": "constructed-bearing-shaft-2",
+        "a": {
+          "body": "chassis",
+          "site": "constructed-bearing-shaft-2"
+        },
+        "b": {
+          "body": "shaft-2",
+          "site": "root"
+        }
+      },
+      {
+        "id": "constructed-bearing-shaft-3",
+        "a": {
+          "body": "chassis",
+          "site": "constructed-bearing-shaft-3"
+        },
+        "b": {
+          "body": "shaft-3",
+          "site": "root"
+        }
+      },
+      {
+        "id": "constructed-bearing-shaft-4",
+        "a": {
+          "body": "chassis",
+          "site": "constructed-bearing-shaft-4"
+        },
+        "b": {
+          "body": "shaft-4",
+          "site": "root"
+        }
+      },
+      {
+        "id": "constructed-bearing-shaft-5",
+        "a": {
+          "body": "chassis",
+          "site": "constructed-bearing-shaft-5"
+        },
+        "b": {
+          "body": "shaft-5",
+          "site": "root"
+        }
+      },
+      {
+        "id": "constructed-bearing-shaft-6",
+        "a": {
+          "body": "chassis",
+          "site": "constructed-bearing-shaft-6"
+        },
+        "b": {
+          "body": "shaft-6",
+          "site": "root"
+        }
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-leg-middle",
+        "a": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-leg-a",
+          "site": "tip"
+        },
+        "b": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-leg-b",
+          "site": "tip"
+        }
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-leg-root-a",
+        "a": {
+          "body": "chassis",
+          "site": "level-foot-branch-0--leg-1-replacement-1-lower"
+        },
+        "b": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-leg-a",
+          "site": "root"
+        }
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-leg-root-b",
+        "a": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-leg-b",
+          "site": "root"
+        },
+        "b": {
+          "body": "shaft-6",
+          "site": "branch-0--leg-1-tip"
+        }
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-sole-base",
+        "a": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-sole-parallel",
+          "site": "root"
+        },
+        "b": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-upper-output",
+          "site": "toe"
+        }
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-sole-driver",
+        "a": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-leg-b",
+          "site": "bottom"
+        },
+        "b": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-sole-output",
+          "site": "left"
+        }
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-sole-tip",
+        "a": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-sole-output",
+          "site": "right"
+        },
+        "b": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-sole-parallel",
+          "site": "tip"
+        }
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-upper-base",
+        "a": {
+          "body": "chassis",
+          "site": "level-foot-branch-0--leg-1-replacement-1-upper"
+        },
+        "b": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-upper-parallel",
+          "site": "root"
+        }
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-upper-driver",
+        "a": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-leg-a",
+          "site": "tip"
+        },
+        "b": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-upper-output",
+          "site": "corner"
+        }
+      },
+      {
+        "id": "level-foot-branch-0--leg-1-replacement-1-upper-tip",
+        "a": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-upper-output",
+          "site": "top"
+        },
+        "b": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-upper-parallel",
+          "site": "tip"
+        }
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-leg-middle",
+        "a": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-leg-a",
+          "site": "tip"
+        },
+        "b": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-leg-b",
+          "site": "tip"
+        }
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-leg-root-a",
+        "a": {
+          "body": "chassis",
+          "site": "level-foot-branch-1--leg-0-replacement-1-lower"
+        },
+        "b": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-leg-a",
+          "site": "root"
+        }
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-leg-root-b",
+        "a": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-leg-b",
+          "site": "root"
+        },
+        "b": {
+          "body": "shaft-6",
+          "site": "branch-1--leg-0-tip"
+        }
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-sole-base",
+        "a": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-sole-parallel",
+          "site": "root"
+        },
+        "b": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-upper-output",
+          "site": "toe"
+        }
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-sole-driver",
+        "a": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-leg-b",
+          "site": "bottom"
+        },
+        "b": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-sole-output",
+          "site": "left"
+        }
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-sole-tip",
+        "a": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-sole-output",
+          "site": "right"
+        },
+        "b": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-sole-parallel",
+          "site": "tip"
+        }
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-upper-base",
+        "a": {
+          "body": "chassis",
+          "site": "level-foot-branch-1--leg-0-replacement-1-upper"
+        },
+        "b": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-upper-parallel",
+          "site": "root"
+        }
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-upper-driver",
+        "a": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-leg-a",
+          "site": "tip"
+        },
+        "b": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-upper-output",
+          "site": "corner"
+        }
+      },
+      {
+        "id": "level-foot-branch-1--leg-0-replacement-1-upper-tip",
+        "a": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-upper-output",
+          "site": "top"
+        },
+        "b": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-upper-parallel",
+          "site": "tip"
+        }
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-leg-middle",
+        "a": {
+          "body": "level-foot-leg-0-replacement-1-leg-a",
+          "site": "tip"
+        },
+        "b": {
+          "body": "level-foot-leg-0-replacement-1-leg-b",
+          "site": "tip"
+        }
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-leg-root-a",
+        "a": {
+          "body": "chassis",
+          "site": "level-foot-leg-0-replacement-1-lower"
+        },
+        "b": {
+          "body": "level-foot-leg-0-replacement-1-leg-a",
+          "site": "root"
+        }
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-leg-root-b",
+        "a": {
+          "body": "level-foot-leg-0-replacement-1-leg-b",
+          "site": "root"
+        },
+        "b": {
+          "body": "shaft-2",
+          "site": "leg-0-tip"
+        }
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-sole-base",
+        "a": {
+          "body": "level-foot-leg-0-replacement-1-sole-parallel",
+          "site": "root"
+        },
+        "b": {
+          "body": "level-foot-leg-0-replacement-1-upper-output",
+          "site": "toe"
+        }
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-sole-driver",
+        "a": {
+          "body": "level-foot-leg-0-replacement-1-leg-b",
+          "site": "bottom"
+        },
+        "b": {
+          "body": "level-foot-leg-0-replacement-1-sole-output",
+          "site": "left"
+        }
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-sole-tip",
+        "a": {
+          "body": "level-foot-leg-0-replacement-1-sole-output",
+          "site": "right"
+        },
+        "b": {
+          "body": "level-foot-leg-0-replacement-1-sole-parallel",
+          "site": "tip"
+        }
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-upper-base",
+        "a": {
+          "body": "chassis",
+          "site": "level-foot-leg-0-replacement-1-upper"
+        },
+        "b": {
+          "body": "level-foot-leg-0-replacement-1-upper-parallel",
+          "site": "root"
+        }
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-upper-driver",
+        "a": {
+          "body": "level-foot-leg-0-replacement-1-leg-a",
+          "site": "tip"
+        },
+        "b": {
+          "body": "level-foot-leg-0-replacement-1-upper-output",
+          "site": "corner"
+        }
+      },
+      {
+        "id": "level-foot-leg-0-replacement-1-upper-tip",
+        "a": {
+          "body": "level-foot-leg-0-replacement-1-upper-output",
+          "site": "top"
+        },
+        "b": {
+          "body": "level-foot-leg-0-replacement-1-upper-parallel",
+          "site": "tip"
+        }
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-leg-middle",
+        "a": {
+          "body": "level-foot-leg-1-replacement-1-leg-a",
+          "site": "tip"
+        },
+        "b": {
+          "body": "level-foot-leg-1-replacement-1-leg-b",
+          "site": "tip"
+        }
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-leg-root-a",
+        "a": {
+          "body": "chassis",
+          "site": "level-foot-leg-1-replacement-1-lower"
+        },
+        "b": {
+          "body": "level-foot-leg-1-replacement-1-leg-a",
+          "site": "root"
+        }
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-leg-root-b",
+        "a": {
+          "body": "level-foot-leg-1-replacement-1-leg-b",
+          "site": "root"
+        },
+        "b": {
+          "body": "shaft-2",
+          "site": "leg-1-tip"
+        }
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-sole-base",
+        "a": {
+          "body": "level-foot-leg-1-replacement-1-sole-parallel",
+          "site": "root"
+        },
+        "b": {
+          "body": "level-foot-leg-1-replacement-1-upper-output",
+          "site": "toe"
+        }
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-sole-driver",
+        "a": {
+          "body": "level-foot-leg-1-replacement-1-leg-b",
+          "site": "bottom"
+        },
+        "b": {
+          "body": "level-foot-leg-1-replacement-1-sole-output",
+          "site": "left"
+        }
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-sole-tip",
+        "a": {
+          "body": "level-foot-leg-1-replacement-1-sole-output",
+          "site": "right"
+        },
+        "b": {
+          "body": "level-foot-leg-1-replacement-1-sole-parallel",
+          "site": "tip"
+        }
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-upper-base",
+        "a": {
+          "body": "chassis",
+          "site": "level-foot-leg-1-replacement-1-upper"
+        },
+        "b": {
+          "body": "level-foot-leg-1-replacement-1-upper-parallel",
+          "site": "root"
+        }
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-upper-driver",
+        "a": {
+          "body": "level-foot-leg-1-replacement-1-leg-a",
+          "site": "tip"
+        },
+        "b": {
+          "body": "level-foot-leg-1-replacement-1-upper-output",
+          "site": "corner"
+        }
+      },
+      {
+        "id": "level-foot-leg-1-replacement-1-upper-tip",
+        "a": {
+          "body": "level-foot-leg-1-replacement-1-upper-output",
+          "site": "top"
+        },
+        "b": {
+          "body": "level-foot-leg-1-replacement-1-upper-parallel",
+          "site": "tip"
+        }
+      }
+    ],
+    "motor": {
+      "body": "constructed-shaft-280--60",
+      "phase": 0.130899693899574
+    },
+    "transmissions": [
+      {
+        "input": "constructed-shaft-280--60",
+        "output": "shaft-4",
+        "ratio": -1,
+        "phase": 0.1308996938995747
+      },
+      {
+        "input": "shaft-3",
+        "output": "shaft-2",
+        "ratio": -1,
+        "phase": 0.1308996938995747
+      },
+      {
+        "input": "shaft-4",
+        "output": "shaft-3",
+        "ratio": -1,
+        "phase": 0.1308996938995747
+      },
+      {
+        "input": "shaft-4",
+        "output": "shaft-5",
+        "ratio": -1,
+        "phase": 0.1308996938995747
+      },
+      {
+        "input": "shaft-5",
+        "output": "shaft-6",
+        "ratio": -1,
+        "phase": 0.1308996938995747
+      }
+    ],
+    "feet": [
+      {
+        "id": "branch-0--leg-1",
+        "port": {
+          "body": "level-foot-branch-0--leg-1-replacement-1-sole-output",
+          "site": "contact"
+        },
+        "radius": 4
+      },
+      {
+        "id": "branch-1--leg-0",
+        "port": {
+          "body": "level-foot-branch-1--leg-0-replacement-1-sole-output",
+          "site": "contact"
+        },
+        "radius": 4
+      },
+      {
+        "id": "leg-0",
+        "port": {
+          "body": "level-foot-leg-0-replacement-1-sole-output",
+          "site": "contact"
+        },
+        "radius": 4
+      },
+      {
+        "id": "leg-1",
+        "port": {
+          "body": "level-foot-leg-1-replacement-1-sole-output",
+          "site": "contact"
+        },
+        "radius": 4
+      }
+    ]
+  },
+  "schemaVersion": 1
+}

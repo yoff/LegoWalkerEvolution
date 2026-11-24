@@ -1,0 +1,47 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Domain.fs" />
+    <Compile Include="Motion.fs" />
+    <Compile Include="SpatialMotion.fs" />
+    <Compile Include="MotionExamples.fs" />
+    <Compile Include="MotionExport.fs" />
+    <Compile Include="Kinematics.fs" />
+    <Compile Include="Platform.fs" />
+    <Compile Include="Grammar.fs" />
+    <Compile Include="Export.fs" />
+    <Compile Include="Realization.fs" />
+    <Compile Include="WalkerDesign.fs" />
+    <Compile Include="WalkerLegFamilies.fs" />
+    <Compile Include="WalkerRealization.fs" />
+    <Compile Include="WalkerSeeds.fs" />
+    <Compile Include="Walker1Seeds.fs" />
+    <Compile Include="WalkerStructural.fs" />
+    <Compile Include="WalkerLayout.fs" />
+    <Compile Include="WalkerBuilder.fs" />
+    <Compile Include="WalkerClearance.fs" />
+    <Compile Include="WalkerMotionSpace.fs" />
+    <Compile Include="WalkerConstruction.fs" />
+    <Compile Include="WalkerInnerFeet.fs" />
+    <Compile Include="WalkerFootPlates.fs" />
+    <Compile Include="WalkerConnectionGrammar.fs" />
+    <Compile Include="ConstructionSearch.fs" />
+    <Compile Include="WalkerPackaging.fs" />
+    <Compile Include="WalkerConstructionTheory.fs" />
+    <Compile Include="WalkerLoops.fs" />
+    <Compile Include="WalkerLevelFeet.fs" />
+    <Compile Include="WalkerMotifGallery.fs" />
+    <Compile Include="WalkerLengths.fs" />
+    <Compile Include="WalkerEvolution.fs" />
+    <Compile Include="Evolution.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="MotionPreview.html" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,40 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Tests.fs" />
+    <Compile Include="MotionTests.fs" />
+    <Compile Include="SpatialMotionTests.fs" />
+    <Compile Include="RealizationTests.fs" />
+    <Compile Include="WalkerTests.fs" />
+    <Compile Include="Walker1SeedsTests.fs" />
+    <Compile Include="WalkerInnerFeetTests.fs" />
+    <Compile Include="WalkerEvolutionTests.fs" />
+    <Compile Include="LegFamilyTests.fs" />
+    <Compile Include="WalkerLengthsTests.fs" />
+    <Compile Include="WalkerClearanceTests.fs" />
+    <Compile Include="WalkerMotionSpaceTests.fs" />
+    <Compile Include="WalkerConnectionGrammarTests.fs" />
+    <Compile Include="WalkerPackagingTests.fs" />
+    <Compile Include="ConstructionSearchTests.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\LegoWalkers.Core\LegoWalkers.Core.fsproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="../visualizations/*.svg" Link="visualizations/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

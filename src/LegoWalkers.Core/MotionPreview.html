@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LegoWalkers motion grammar</title>
+<style>
+:root{color-scheme:dark;font:16px/1.5 system-ui;background:#101723;color:#e2eaf7}
+body{max-width:1100px;margin:auto;padding:24px}h1{margin-bottom:8px}
+p{color:#b7c6da}canvas{width:100%;height:65vh;background:#182333;border-radius:12px}
+.controls{display:flex;gap:16px;align-items:center;margin:16px 0}input{flex:1}
+button{font:inherit;padding:8px 18px;border-radius:8px;cursor:pointer}
+a{color:#91c7ff}pre{white-space:pre-wrap}details{margin:20px 0}.error{color:#ffb3a8}
+</style>
+</head>
+<body>
+<h1>Motion-construction grammar</h1>
+<p>One rotational input, rigid bodies, attachment sites, passive hinges and transmission constraints.
+Foot paths are solved from the mechanism, not prescribed.</p>
+<p><strong>Kinematics only:</strong> this is a linkage diagram, not a LEGO render, dynamics test,
+collision check or qualification for walking. Body colours are illustrative; blue dots denote feet.</p>
+<canvas id="view" aria-label="Solved planar mechanism and foot trajectories"></canvas>
+<div class="controls"><button id="play" type="button">Pause</button>
+<input id="phase" aria-label="Motor phase" type="range" min="0" step="1" value="0">
+<output id="status" aria-live="off"></output></div>
+<p id="error" class="error" role="alert"></p>
+<p><a href="program.json">Editable construction program</a> &middot; <a href="motion.json">Solved cycle</a></p>
+<details><summary>Construction graph (no named-leg operators)</summary><pre id="program"></pre></details>
+<script type="application/json" id="motion-data">__MOTION_JSON__</script>
+<script>
+(() => {
+    const data = JSON.parse(document.getElementById("motion-data").textContent);
+    const canvas = document.getElementById("view");
+    const context = canvas.getContext("2d");
+    const slider = document.getElementById("phase");
+    const status = document.getElementById("status");
+    const button = document.getElementById("play");
+    document.getElementById("program").textContent = JSON.stringify(data.program, null, 2);
+    const colours = ["#94a8c2","#ffd166","#ef817a","#90d6ad","#c69cf4","#e4aa67","#73cbd4","#cfb8a7"];
+    const frames = data.frames;
+    const count = frames.length - 1;
+    slider.max = count;
+    let playing = true;
+    let phase = 0;
+    let previous = null;
+
+    function points(frame) {
+        const poses = new Map(frame.poses.map(pose => [pose.body, pose]));
+        return new Map(data.program.bodies.map(body => {
+            const pose = poses.get(body.id);
+            const c = Math.cos(pose.angle), s = Math.sin(pose.angle);
+            return [body.id, body.sites.map(site => ({
+                id: site.id,
+                x: pose.origin[0] + c*site.position.x - s*site.position.y,
+                y: pose.origin[1] + s*site.position.x + c*site.position.y
+            }))];
+        }));
+    }
+    const all = frames.flatMap(frame => [...points(frame).values()].flat());
+    const bounds = all.reduce((b,p)=>({
+        left:Math.min(b.left,p.x),right:Math.max(b.right,p.x),
+        top:Math.min(b.top,p.y),bottom:Math.max(b.bottom,p.y)
+    }),{left:Infinity,right:-Infinity,top:Infinity,bottom:-Infinity});
+    function draw() {
+        const frame = frames[Math.round(phase)];
+        const size = canvas.getBoundingClientRect();
+        canvas.width = Math.max(1, Math.round(size.width*devicePixelRatio));
+        canvas.height = Math.max(1, Math.round(size.height*devicePixelRatio));
+        context.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+        const scale = Math.min((size.width-80)/Math.max(1,bounds.right-bounds.left),
+            (size.height-80)/Math.max(1,bounds.bottom-bounds.top));
+        const x = value => size.width/2 + (value-(bounds.left+bounds.right)/2)*scale;
+        const y = value => size.height/2 + (value-(bounds.top+bounds.bottom)/2)*scale;
+        const current = points(frame);
+        for (const foot of data.program.feet) {
+            context.beginPath(); context.strokeStyle="#70b8ff66"; context.lineWidth=2;
+            frames.forEach((sample,index) => {
+                const p=sample.feet.find(item=>item.id===foot.id).position;
+                if(index===0)context.moveTo(x(p[0]),y(p[1]));else context.lineTo(x(p[0]),y(p[1]));
+            });
+            context.stroke();
+        }
+        data.program.bodies.forEach((body,index) => {
+            const sites = current.get(body.id);
+            const ordered = [...sites].sort((a,b) => a.x-b.x || a.y-b.y);
+            context.strokeStyle = colours[index%colours.length];
+            context.fillStyle = context.strokeStyle;
+            context.lineWidth = body.grounded ? 3 : 7;
+            context.setLineDash(body.grounded ? [5,5] : []);
+            context.beginPath();
+            ordered.forEach((p,i) => {if(i===0)context.moveTo(x(p.x),y(p.y));else context.lineTo(x(p.x),y(p.y));});
+            context.stroke(); context.setLineDash([]);
+            for(const p of sites){context.beginPath();context.arc(x(p.x),y(p.y),4,0,2*Math.PI);context.fill();}
+            const p=sites[0];context.font="12px system-ui";context.fillText(body.id,x(p.x)+8,y(p.y)-10);
+        });
+        for(const foot of frame.feet){
+            context.fillStyle="#70b8ff";context.beginPath();
+            context.arc(x(foot.position[0]),y(foot.position[1]),7,0,2*Math.PI);context.fill();
+        }
+        slider.value=Math.round(phase);
+        status.textContent=`${(frame.inputAngle*180/Math.PI).toFixed(0)} deg | closure ${frame.maxResidualLdu.toExponential(1)} LDU`;
+    }
+    button.addEventListener("click",()=>{playing=!playing;button.textContent=playing?"Pause":"Play";});
+    slider.addEventListener("input",()=>{phase=Number(slider.value);playing=false;button.textContent="Play";draw();});
+    window.addEventListener("resize",draw);
+    function animate(time) {
+        if(previous!==null && playing)phase=(phase+Math.min(time-previous,100)*count/4000)%count;
+        previous=time;
+        draw();
+        requestAnimationFrame(animate);
+    }
+    draw();requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

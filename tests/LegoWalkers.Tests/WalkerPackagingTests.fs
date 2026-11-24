@@ -1,0 +1,480 @@
+namespace LegoWalkers
+
+open LegoWalkers
+open Xunit
+
+module WalkerPackagingTests =
+    let private fixture () =
+        let program,genome = WalkerSeeds.fourBar 2
+        let unwrap result = Result.defaultWith (Realization.json >> failwith) result
+        let screened = Realization.screen program 72 |> unwrap
+        let realized = WalkerRealization.compile screened genome |> unwrap
+        let shafts = program.Motor.Body::(program.Transmissions |> List.collect (fun t -> [t.Input;t.Output])) |> Set.ofList
+        let gears = genome.Bodies |> List.collect (fun body ->
+            body.Parts |> List.filter (fun p -> (Catalog.gearTeeth p.Part).IsSome)
+            |> List.map (fun p -> body.Body,{p with Id="fresh-"+p.Id}))
+        let bearings = genome.Connections |> List.filter (fun c -> (Catalog.get c.Placement.Part).Connector=Some Axle)
+        let axles = bearings |> List.map (fun c ->
+            let hinge = program.Hinges |> List.find (fun h -> h.Id=c.Hinges.Head)
+            let body = if hinge.A.Body=realized.Assembly.Chassis then hinge.B.Body else hinge.A.Body
+            body,{c.Placement with Id="fresh-"+c.Placement.Id})
+        let removed =
+            (genome.Bodies |> List.collect (fun b ->
+                if shafts.Contains b.Body then
+                    b.Parts |> List.filter (fun p -> (Catalog.gearTeeth p.Part).IsSome || p.Part="3713.dat" || p.Part="4265c.dat")
+                    |> List.map _.Id
+                else []))
+            @ (bearings |> List.map (fun c -> c.Placement.Id))
+        {Reference=program;Program=program;Source=genome
+         Targets=genome.Bodies |> List.collect _.Parts |> List.filter (fun p ->
+            List.contains p.Id ["payload-battery";"payload-receiver";genome.MotorPart])
+                 |> List.map (fun p ->
+                     let placed =
+                         if p.Id=genome.MotorPart then {p with Position={p.Position with Z=p.Position.Z+20.0}}
+                         elif p.Id="payload-receiver" then {p with Position={p.Position with Y=p.Position.Y-80.0}}
+                         else p
+                     {Placement=placed;ToleranceLdu=Vec3.zero})
+         Drive={Root=program.Motor.Body;Gears=gears;Axles=axles;MotorClockScale=1.0;InternalCompoundBearings=false}
+         ObsoletePartIds=removed;GroundClearance=None;FootConstructionGates=[]}
+
+    [<Fact>]
+    let ``three beam support closes axial reach using legal covered friction pins`` () =
+        let anchor,socket = Vec3.create 0 0 100,Vec3.create 120 0 210
+        let routes = WalkerPackaging.supportRoutes 1 "extended" [anchor] [] socket socket.Z
+        Assert.NotEmpty routes
+        for parts,pins in routes do
+            Assert.Equal(3,parts.Length)
+            Assert.Equal(3,pins.Length)
+            let sockets = anchor::(parts |> List.collect (fun part ->
+                (Catalog.get part.Part).Ports |> List.map (fun port ->
+                    Vec3.add part.Position (Rotation.apply part.Rotation port.Position))))
+            for pin in pins do
+                let low,high = Catalog.shaftRange pin.Part
+                let engaged = sockets |> List.distinct |> List.filter (fun socket ->
+                    let delta = Vec3.subtract socket pin.Position
+                    Vec3.length(Vec3.cross delta pin.Rotation.X)<1e-6
+                    && Vec3.dot delta pin.Rotation.X>=low && Vec3.dot delta pin.Rotation.X<=high)
+                Assert.Equal(2,engaged.Length)
+                for socket in engaged do
+                    let along = Vec3.dot (Vec3.subtract socket pin.Position) pin.Rotation.X
+                    Assert.True(along-10.0>=low-1e-6 && along+10.0<=high+1e-6)
+                Assert.Equal(0,WalkerPackaging.contactCapacityDeficit pin parts 0)
+        Assert.Empty(WalkerPackaging.supportRoutes 1 "too-far" [anchor] [] {socket with Z=320.0} 320.0)
+
+    [<Fact>]
+    let ``bounded support can turn away from an occupied anchor before reaching the bearing plane`` () =
+        let anchor,socket = Vec3.create 0 0 120,Vec3.create 120 0 210
+        let template = (fixture ()).Drive.Gears.Head |> snd
+        let occupied = {template with
+                            Part="4459.dat";Position=Vec3.create 0 0 155
+                            Rotation={X=Vec3.create 0 0 1;Y=Vec3.create 1 0 0;Z=Vec3.create 0 1 0}}
+        let routes = WalkerPackaging.supportRoutes 1 "around-pin" [anchor] [occupied] socket socket.Z
+        Assert.NotEmpty routes
+        for parts,pins in routes do
+            Assert.InRange(parts.Length,4,5)
+            Assert.Equal(parts.Length,pins.Length)
+            for pin in pins do
+                Assert.False(Catalog.shaftsOverlap pin.Part pin.Position pin.Rotation occupied.Part occupied.Position occupied.Rotation)
+
+    [<Fact>]
+    let ``extended bracket bonds include every bridge pin and mount the final beam`` () =
+        let prefix = "packaging-payload-battery-0"
+        let anchor,socket = Vec3.create 0 0 100,Vec3.create 120 0 210
+        let parts,pins = WalkerPackaging.supportRoutes 1 prefix [anchor] [] socket socket.Z |> List.head
+        let frame = {parts.Head with Id="frame-anchor";Position={parts.Head.Position with Z=anchor.Z}}
+        let last = parts |> List.last
+        let target = {last with Id="payload-battery";Position={last.Position with Z=230.0}}
+        let mount = {pins.Head with
+                        Id=prefix+"-mount-pin";Part="4459.dat";Position=Vec3.create 120 0 220}
+        let bonds = WalkerConstructionTheory.bracketBonds prefix (parts @ pins @ [mount]) [frame] [target]
+        Assert.Equal(pins.Length+1,bonds.Length)
+        let mountBond = bonds |> List.find (fun b -> b.Connector=mount.Id)
+        Assert.Equal(last.Id,mountBond.PartA)
+        Assert.Equal(target.Id,mountBond.PartB)
+        for pin in pins do Assert.Single(bonds |> List.filter (fun b -> b.Connector=pin.Id)) |> ignore
+
+    [<Fact>]
+    let ``bearing stack keeps existing collars instead of putting a beam through them`` () =
+        let request = fixture ()
+        let body,gear = request.Drive.Gears.Head
+        let collar = {gear with Id="retained-stack-collar";Part="3713.dat";Position={gear.Position with Z=gear.Position.Z-20.0}}
+        let source =
+            {request.Source with
+                Bodies=request.Source.Bodies |> List.map (fun b ->
+                    if b.Body=body then {b with Parts=b.Parts @ [collar]} else b)}
+        let request = {request with Source=source}
+        let planes = WalkerPackaging.driveBearingPlanes request body [gear]
+        Assert.Equal<float list>([gear.Position.Z-40.0;gear.Position.Z+20.0],planes)
+        Assert.All(planes,fun plane -> Assert.True(abs(plane-collar.Position.Z)>=20.0-1e-6))
+        Assert.Contains(collar,(request.Source.Bodies |> List.find (fun b -> b.Body=body)).Parts)
+
+    [<Fact>]
+    let ``wide reduction gear reserves clearance from bearing beam faces`` () =
+        let gear = (fixture ()).Drive.Gears.Head |> snd
+        let gears = [{gear with Part="3648b.dat";Position={gear.Position with Z=100.0}};
+                     {gear with Id=gear.Id+"-compound";Part="3649.dat";Position={gear.Position with Z=220.0}}]
+        Assert.Equal<float list>([80.0;120.0;190.0;250.0],WalkerPackaging.bearingPlanes false gears)
+        Assert.Equal<float list>([120.0;190.0],WalkerPackaging.bearingPlanes true gears)
+        Assert.Equal(10.0,220.0-10.0-(190.0+10.0))
+        Assert.Throws<System.ArgumentException>(fun () ->
+            WalkerPackaging.bearingPlanes true [gears[0];{gears[1] with Position={gears[1].Position with Z=160.0}}] |> ignore) |> ignore
+
+    [<Fact>]
+    let ``scoped motor reduction moves only the root mesh and preserves downstream gear ratio`` () =
+        let request = fixture ()
+        Assert.Equal(request,WalkerConstructionTheory.withMotorReduction 1 request)
+        Assert.Throws<System.ArgumentException>(fun () -> WalkerConstructionTheory.withMotorReduction 2 request |> ignore) |> ignore
+        let edge = request.Program.Transmissions |> List.find (fun t -> t.Input=request.Drive.Root)
+        let root = request.Drive.Gears |> List.find (fun (body,_) -> body=edge.Input) |> snd
+        let gears = request.Drive.Gears |> List.map (fun (body,gear) ->
+            if body=edge.Input then body,{gear with Part="3648b.dat"}
+            elif body=edge.Output then body,{gear with Part="3648b.dat";Position={root.Position with X=root.Position.X+60.0}}
+            else body,gear)
+        let request = {request with Drive={request.Drive with Gears=gears}}
+        let reduced = WalkerConstructionTheory.withMotorReduction 5 request
+        Assert.Equal(request.Reference,reduced.Reference)
+        Assert.Equal(request.Source,reduced.Source)
+        Assert.Equal<WalkerComponentTarget list>(request.Targets,reduced.Targets)
+        Assert.Equal<(string * WalkerPlacement) list>(request.Drive.Axles,reduced.Drive.Axles)
+        Assert.Equal(request.Drive.MotorClockScale*5.0,reduced.Drive.MotorClockScale)
+        let replacement = reduced.Program.Transmissions |> List.find (fun t -> t.Input=edge.Input)
+        Assert.Equal(edge.Ratio/5.0,replacement.Ratio)
+        Assert.Equal<MotionTransmission list>(request.Program.Transmissions |> List.filter (fun t -> t<>edge),
+                     reduced.Program.Transmissions |> List.filter (fun t -> t<>replacement))
+        let reducedRoot = reduced.Drive.Gears |> List.find (fun (body,_) -> body=edge.Input) |> snd
+        Assert.Equal("3647.dat",reducedRoot.Part)
+        Assert.Equal(root.Position.Z+80.0,reducedRoot.Position.Z)
+        let routes = WalkerConstructionTheory.driveOptions reduced
+        Assert.NotEmpty routes
+        for route in routes do
+            let output = route.Drive.Gears |> List.filter (fun (body,_) -> body=edge.Output) |> List.map snd
+            for gear in output do
+                Assert.Equal((if abs(gear.Position.Z-reducedRoot.Position.Z)<1e-6 then "3649.dat" else "3648b.dat"),gear.Part)
+            for transmission in route.Program.Transmissions do
+                let pairs = [for bodyA,a in route.Drive.Gears do
+                                for bodyB,b in route.Drive.Gears do
+                                    if bodyA=transmission.Input && bodyB=transmission.Output
+                                       && Catalog.matchesSpurMesh transmission.Ratio a.Part a.Position b.Part b.Position then yield a,b]
+                Assert.Single pairs |> ignore
+        Assert.Throws<System.ArgumentException>(fun () -> WalkerConstructionTheory.withMotorReduction 5 reduced |> ignore) |> ignore
+
+    [<Fact>]
+    let ``motor setback stays within tolerance and separates both housing and side bracket from gears`` () =
+        let request = fixture ()
+        let motor = request.Targets |> List.find (fun t -> t.Placement.Id=request.Source.MotorPart)
+        let placement = {motor.Placement with
+                            Position=Vec3.create 0 0 120
+                            Rotation={X=Vec3.create -1 0 0;Y=Vec3.create 0 1 0;Z=Vec3.create 0 0 -1}}
+        let targets = request.Targets |> List.map (fun t ->
+            if t.Placement.Id=motor.Placement.Id then {t with Placement=placement} else t)
+        let gears = request.Drive.Gears |> List.mapi (fun index (body,part) ->
+            let x = if body=request.Drive.Root then 0.0 else float(index+1)*500.0
+            body,{part with Position=Vec3.create x 0 100})
+        let request = {request with Targets=targets;Drive={request.Drive with Gears=gears}}
+        Assert.Single(WalkerConstructionTheory.targetOptions request) |> ignore
+        let request = {request with Targets=request.Targets |> List.map (fun t ->
+                                        if t.Placement.Id=motor.Placement.Id then {t with ToleranceLdu=Vec3.create 0 0 60} else t)}
+        let options = WalkerConstructionTheory.targetOptions request
+        let best = options.Head |> List.find (fun t -> t.Placement.Id=motor.Placement.Id)
+        Assert.Equal(Vec3.create 0 0 60,best.Placement.Position)
+        Assert.True(abs(best.Placement.Position.Z+10.0-100.0)>=30.0)
+        for targets in options do
+            for target in targets do
+                let original = request.Targets |> List.find (fun t -> t.Placement.Id=target.Placement.Id)
+                Assert.Equal(original.Placement.Position.X,target.Placement.Position.X)
+                Assert.Equal(original.Placement.Position.Y,target.Placement.Position.Y)
+                Assert.True(abs(target.Placement.Position.Z-original.Placement.Position.Z)<=original.ToleranceLdu.Z)
+                Assert.Equal(original.Placement.Rotation,target.Placement.Rotation)
+        Assert.Equal(100.0,(request.Drive.Gears |> List.find (fun (body,_) -> body=request.Drive.Root) |> snd).Position.Z)
+
+    [<Fact>]
+    let ``shifted motor mount bonds refer to the selected placement rather than nominal targets`` () =
+        let request = fixture ()
+        let rootGear = request.Drive.Gears |> List.find (fun (body,_) -> body=request.Drive.Root) |> snd
+        let targets = request.Targets |> List.map (fun t ->
+            if t.Placement.Id=request.Source.MotorPart then
+                let position = {rootGear.Position with Z=rootGear.Position.Z-20.0}
+                let rotation = {X=Vec3.create -1 0 0;Y=Vec3.create 0 1 0;Z=Vec3.create 0 0 -1}
+                let placed = {t.Placement with Position=position;Rotation=rotation}
+                {t with Placement=placed;ToleranceLdu=Vec3.create 0 0 80}
+            else t)
+        let request = {request with Targets=targets}
+        let state,witness =
+            WalkerConstructionTheory.start request "shifted-mount-test" 4096 64
+            |> WalkerConstructionTheory.advance request "shifted-mount-test"
+        Assert.True(witness.IsSome,Realization.json state.Rejections)
+        let construction = witness.Value
+        let placed = construction.Realized.Assembly.Parts |> List.find (fun p -> p.Id=request.Source.MotorPart)
+        let nominal = targets |> List.find (fun t -> t.Placement.Id=request.Source.MotorPart) |> _.Placement
+        Assert.NotEqual(nominal.Position.Z,placed.Position.Z)
+        let bonds = state.Pending.Value.Steps |> List.collect _.Bonds |> List.filter (fun b -> b.PartB=placed.Id)
+        Assert.Equal(2,bonds.Length)
+        for bond in bonds do
+            Assert.Contains((Catalog.get placed.Part).Ports,fun port ->
+                Vec3.distance bond.PositionB (Vec3.add placed.Position (Rotation.apply placed.Rotation port.Position))<1e-6)
+
+    [<Fact>]
+    let ``nominal shaft contact budget counts structural parts and future bearings`` () =
+        let gear = (fixture ()).Drive.Gears.Head |> snd
+        let parts = [100.0;120.0;160.0] |> List.mapi (fun index depth ->
+            {gear with Id=string index;Position=Vec3.create 0 0 depth;Rotation=Rotation.identity})
+        let axle = {gear with
+                        Part="3705.dat"
+                        Position=Vec3.create 0 0 130
+                        Rotation={X=Vec3.create 0 0 1;Y=Vec3.create 1 0 0;Z=Vec3.create 0 1 0}}
+        Assert.Equal(1,WalkerPackaging.contactCapacityDeficit axle parts 2)
+        Assert.Equal(0,WalkerPackaging.contactCapacityDeficit {axle with Part="44294.dat"} parts 2)
+        let pins = parts |> List.map (fun p -> {p with Position={p.Position with Z=130.0}})
+        Assert.Equal(1,WalkerPackaging.contactCapacityDeficit {axle with Part="4459.dat"} pins 0)
+        Assert.Equal(0,WalkerPackaging.contactCapacityDeficit {axle with Part="6558.dat"} pins 0)
+        let nearby = pins |> List.map (fun p -> {p with Position={p.Position with X=2.5}})
+        Assert.Equal(1,WalkerPackaging.contactCapacityDeficit {axle with Part="4459.dat"} nearby 0)
+        let outside = pins |> List.map (fun p -> {p with Position={p.Position with X=3.1}})
+        Assert.Equal(0,WalkerPackaging.contactCapacityDeficit {axle with Part="4459.dat"} outside 0)
+
+    [<Fact>]
+    let ``internal compound bearings allow a short shaft without relaxing gear wall coverage`` () =
+        let gear = (fixture ()).Drive.Gears.Head |> snd
+        let gears = [{gear with Position={gear.Position with Z=100.0}};
+                     {gear with Id=gear.Id+"-compound";Position={gear.Position with Z=160.0}}]
+        Assert.Equal<float list>([80.0;120.0;140.0;180.0],WalkerPackaging.bearingPlanes false gears)
+        Assert.Equal<float list>([120.0;140.0],WalkerPackaging.bearingPlanes true gears)
+        let low,high = Catalog.shaftRange "3705.dat"
+        Assert.Equal(90.0,130.0+low)
+        Assert.Equal(170.0,130.0+high)
+        for center in [100.0;120.0;140.0;160.0] do
+            Assert.True(130.0+low<=center-10.0 && 130.0+high>=center+10.0)
+        Assert.True(130.0+high+8.0<195.0)
+        Assert.Throws<System.ArgumentException>(fun () ->
+            WalkerPackaging.bearingPlanes true [{gear with Position={gear.Position with Z=100.0}};
+                                                {gear with Position={gear.Position with Z=140.0}}] |> ignore) |> ignore
+
+    [<Fact>]
+    let ``compound stages can move to the central shaft without moving loaded outputs or motor plane`` () =
+        let request = fixture ()
+        let gear = request.Drive.Gears.Head |> snd
+        let bodies = ["motor-root";"shaft-2";"shaft-3";"shaft-4";"shaft-5";"shaft-6"]
+        let gears = bodies |> List.mapi (fun index body ->
+            let position = if body="motor-root" then Vec3.create 180 -60 160 else Vec3.create (float index*60.0) 0 160
+            body,{gear with Id="gear-"+body;Position=position})
+        let loads = ["shaft-2";"shaft-6"] |> List.map (fun body ->
+            let placement = gears |> List.find (fun (id,_) -> id=body) |> snd
+            {request.Source.Bodies.Head with Body=body;Parts=[{placement with Id="load-"+body;Position={placement.Position with Z=60.0}}]})
+        let edges = ["motor-root","shaft-4";"shaft-4","shaft-3";"shaft-3","shaft-2";"shaft-4","shaft-5";"shaft-5","shaft-6"]
+                    |> List.map (fun (input,output) ->
+                        {request.Program.Transmissions.Head with Input=input;Output=output})
+        let request = {request with Source={request.Source with Bodies=loads};ObsoletePartIds=[]
+                                    Program={request.Program with Transmissions=edges}
+                                    Drive={request.Drive with Root="motor-root";Gears=gears}}
+        let pin = request.Source.Connections.Head
+        let pivot = {pin.Placement with
+                        Part="3673.dat"
+                        Position=Vec3.create 120 0 170
+                        Rotation={X=Vec3.create 0 0 1;Y=Vec3.create 1 0 0;Z=Vec3.create 0 1 0}}
+        let request = {request with Source={request.Source with Connections=[{pin with Placement=pivot}]}}
+        let options = WalkerConstructionTheory.driveOptions request
+        let misplaced = gears |> List.map (fun (body,gear) ->
+            if body="motor-root" then body,{gear with Position=Vec3.create 0 0 160} else body,gear)
+        Assert.Empty(WalkerConstructionTheory.driveOptions {request with Drive={request.Drive with Gears=misplaced}})
+        let centered = options |> List.find (fun route ->
+            route.Drive.InternalCompoundBearings &&
+            (route.Drive.Gears |> List.filter (fun (body,_) -> body="shaft-4") |> List.length)=2)
+        let planes body = centered.Drive.Gears |> List.filter (fun (id,_) -> id=body) |> List.map (snd >> _.Position.Z) |> List.sort
+        for body in ["shaft-2";"shaft-3";"shaft-5";"shaft-6"] do Assert.Equal<float list>([100.0],planes body)
+        Assert.Equal<float list>([100.0;160.0],planes "shaft-4")
+        Assert.Equal<float list>([160.0],planes "motor-root")
+        Assert.Equal(request.Program,centered.Program)
+        Assert.Equal(centered.Drive,options.Head.Drive)
+        let low,high = Catalog.shaftRange "3705.dat"
+        Assert.True(100.0+low<=70.0 && 100.0+high>=130.0)
+        Assert.True(100.0+high+8.0<150.0)
+
+    [<Fact>]
+    let ``joint engagement feedback reaches the existing smooth pin repair grammar`` () =
+        let request = fixture ()
+        let screened = Realization.screen request.Reference 72 |> Result.defaultWith (Realization.json >> failwith)
+        let pivot = request.Source.Connections |> List.find (fun c -> (Catalog.get c.Placement.Part).Connector=Some FrictionlessPin)
+        let feedback = {Kind="joint-port-engagement";Parts=[pivot.Placement.Id];Bodies=[]}
+        let choices = WalkerConstruction.repairs screened request.Source feedback 8
+        let legacy = WalkerConstruction.repairs screened request.Source {feedback with Kind="rigid-body-partition"} 8
+        Assert.Equal(Realization.json legacy,Realization.json choices)
+
+    [<Fact>]
+    let ``motor mounts use housing side sockets and perpendicular block witnesses`` () =
+        let ports = Catalog.mountPorts "58121.dat"
+        Assert.Equal(2,ports.Length)
+        Assert.True(ports |> List.forall (fun p -> abs p.Axis.X=1.0 && p.Position.Z=10.0))
+        let request = fixture ()
+        let state,witness = WalkerConstructionTheory.start request "motor-mount-oracle" 512 64
+                            |> WalkerConstructionTheory.advance request "motor-mount-oracle"
+        Assert.True(witness.IsSome,Realization.json state.Rejections)
+        let parts = witness.Value.Realized.Genome.Bodies |> List.collect _.Parts
+        Assert.Equal(2,parts |> List.filter (fun p -> p.Part="6536.dat") |> List.length)
+        let bonds = state.Pending.Value.Steps |> List.collect _.Bonds
+        let motorBonds = bonds |> List.filter (fun b -> b.PartB=request.Source.MotorPart)
+        Assert.Equal(2,motorBonds.Length)
+        Assert.True(motorBonds |> List.forall (fun b ->
+            b.PartA.EndsWith("-corner") && abs b.AxisB.X>0.999 && b.Connector.EndsWith("-side-pin")))
+
+    [<Fact>]
+    let ``nine L stock covers the loaded output walls without crossing the neighboring link planes`` () =
+        Assert.Equal(Some Axle,(Catalog.get "60485.dat").Connector)
+        let low,high = Catalog.shaftRange "60485.dat"
+        Assert.Equal(-90.0,low)
+        Assert.Equal(90.0,high)
+        let center = 60.0
+        let minimum,maximum = center+low,center+high
+        Assert.Equal(-30.0,minimum)
+        Assert.Equal(150.0,maximum)
+        for socket in [-20.0;140.0] do
+            Assert.True(minimum<=socket-10.0 && maximum>=socket+10.0)
+        for bearing in [80.0;120.0] do
+            Assert.True(minimum<=bearing-10.0 && maximum>=bearing+10.0)
+        Assert.Equal(10.0,minimum-(-40.0))
+        Assert.Equal(10.0,160.0-maximum)
+        let shortLow,shortHigh = Catalog.shaftRange "3707.dat"
+        Assert.True(shortHigh-shortLow<maximum-minimum)
+
+    [<Fact>]
+    let ``shared theory opens actual stock and support decisions before external admission`` () =
+        let request = fixture ()
+        let initial = WalkerConstructionTheory.start request "test-oracle-and-library" 512 64
+        let state,witness = WalkerConstructionTheory.advance request "test-oracle-and-library" initial
+        Assert.True(witness.IsSome,$"{state.Status}; {state.Visited} states; {Realization.json(state.Rejections |> List.truncate 5)}")
+        let proof = state.Pending.Value
+        let motorMount = proof.Steps |> List.find (fun s -> s.Goal="motor-mount")
+        Assert.Equal("select-stock-motor-mount-motif",motorMount.Rule)
+        Assert.Empty(motorMount.Parts)
+        Assert.True(proof.Steps |> List.exists (fun s -> s.Rule="stock-axle-wall-coverage"))
+        Assert.True(proof.Steps |> List.exists (fun s -> s.Rule="two-beam-covered-pin-bracket"))
+        Assert.Equal("oracle",(ConstructionSearch.openGoals proof).Head.Id)
+        Assert.Contains(ConstructionSearch.openGoals proof,fun g -> g.Id="library-connectivity")
+        let walking = proof.Steps |> List.find (fun s -> s.Goal="walking")
+        let drive = proof.Steps |> List.find (fun s -> s.Goal="drive")
+        let preserved = proof.Goals |> List.filter (fun g -> g.Kind="exact-joint-preservation")
+        let expectedPivots = witness.Value.Realized.Genome.Connections |> List.filter (fun c -> List.contains c.Placement.Id walking.Parts)
+        Assert.Equal<Set<string>>(expectedPivots |> List.map (fun c -> c.Placement.Id) |> Set.ofList,
+                                  preserved |> List.map _.Subject |> Set.ofList)
+        Assert.NotEmpty(preserved)
+        for goal in preserved do
+            Assert.Contains(goal.Id,drive.Introduced)
+            Assert.True(goal.External)
+            for producer in proof.Steps |> List.filter (fun s -> not s.Parts.IsEmpty) do
+                Assert.Contains(producer.Goal,goal.Requires)
+        Assert.True(proof.Steps |> List.exists (fun s -> not s.Bonds.IsEmpty))
+        let chassis = witness.Value.Realized.Assembly.Chassis
+        let frame = proof.Steps |> List.find (fun s -> s.Goal="frame") |> _.Parts |> Set.ofList
+        let newStructural =
+            witness.Value.Realized.Genome.Bodies |> List.find (fun b -> b.Body=chassis) |> _.Parts
+            |> List.map _.Id |> Set.ofList |> fun parts -> Set.difference parts frame
+        Assert.Equal<Set<string>>(newStructural,
+            proof.Goals |> List.filter (fun g -> g.Kind="rigid-path-to-frame") |> List.map _.Subject |> Set.ofList)
+        Assert.Throws<System.ArgumentException>(fun () -> ConstructionSearch.accept "ordinary-load-only-report" state |> ignore) |> ignore
+        Assert.Throws<System.ArgumentException>(fun () ->
+            ConstructionSearch.acceptVerified "report" ["oracle";"library-connectivity"] state |> ignore) |> ignore
+        let _,accepted = ConstructionSearch.acceptVerified "report" (ConstructionSearch.openGoals proof |> List.map _.Id) state
+        Assert.Empty(ConstructionSearch.openGoals accepted)
+        Assert.Equal<Set<string>>(witness.Value.Realized.Assembly.Parts |> List.map _.Id |> Set.ofList,
+                                  proof.Steps |> List.collect _.Parts |> Set.ofList)
+        Assert.Throws<System.ArgumentException>(fun () ->
+            WalkerConstructionTheory.advance request "different-library" state |> ignore) |> ignore
+
+    [<Fact>]
+    let ``packaging validates bounded search budget`` () =
+        let request = fixture ()
+        Assert.Throws<System.ArgumentException>(fun () -> WalkerPackaging.realize request 0 |> ignore) |> ignore
+        Assert.Throws<System.ArgumentException>(fun () -> WalkerPackaging.realize request 3 |> ignore) |> ignore
+
+    [<Fact>]
+    let ``three L friction pins are genuine alternatives when a two L pin fits`` () =
+        let request = fixture ()
+        let oracle = "pin-stock-oracle"
+        let initial = WalkerConstructionTheory.start request oracle 512 64
+        let state,original = WalkerConstructionTheory.advance request oracle initial
+        Assert.True(original.IsSome)
+        let proof = state.Pending.Value
+        let expand = WalkerConstructionTheory.expansion request oracle
+        let originalParts =
+            (original.Value.Realized.Genome.Bodies |> List.collect _.Parts)
+            @ original.Value.Realized.Genome.Mounts
+            |> List.map (fun p -> p.Id,p) |> Map.ofList
+        let longer =
+            proof.Steps |> List.indexed |> List.filter (fun (_,s) -> s.Rule="two-beam-covered-pin-bracket")
+            |> List.tryPick (fun (index,selected) ->
+                let prefix = {proof with Steps=proof.Steps |> List.take index}
+                let choices =
+                    match expand prefix [] with
+                    | Branch(_,choices) -> choices
+                    | _ -> failwith "Expected an open bracket production."
+                let parts = selected.Parts |> List.map (fun id -> originalParts[id])
+                parts |> List.filter (fun p -> p.Part="4459.dat")
+                |> List.tryPick (fun pin ->
+                    let upgraded = parts |> List.map (fun p -> if p.Id=pin.Id then {p with Part="6558.dat"} else p)
+                    let key = Export.sha256(Realization.json upgraded)
+                    choices |> List.tryFind (fun c -> c.Step.Choice=key)
+                    |> Option.map (fun choice -> prefix,choice)))
+        Assert.True(longer.IsSome,"Expected a same-geometry 2L-to-3L pin stock alternative.")
+        let prefix,choice = longer.Value
+        let frontier = ConstructionSearch.apply prefix choice
+        let next = {initial with Frontier=[frontier]}
+        let _,alternative = ConstructionSearch.next expand next
+        Assert.True(alternative.IsSome)
+        Assert.True(alternative.Value.Realized.Genome.Mounts |> List.exists (fun pin ->
+            match Map.tryFind pin.Id originalParts with
+            | Some old -> old.Part="4459.dat" && pin.Part="6558.dat" && old.Position=pin.Position && old.Rotation=pin.Rotation
+            | None -> false))
+
+    [<Fact>]
+    let ``missing targets and duplicate drive stock are explicit gates`` () =
+        let request = fixture ()
+        let missing = WalkerPackaging.realize {request with Targets=request.Targets.Tail} 1
+        Assert.Equal("invalid-component-targets",missing.Head.Gates.Head.Code)
+        Assert.True(missing.Head.Construction.IsNone)
+        let duplicate = WalkerPackaging.realize {request with Drive={request.Drive with Gears=request.Drive.Gears.Head::request.Drive.Gears}} 1
+        Assert.Equal("incomplete-drive-stock",duplicate.Head.Gates.Head.Code)
+
+    [<Fact>]
+    let ``invalid tolerances and obsolete references are explicit gates`` () =
+        let request = fixture ()
+        let targets = request.Targets |> List.map (fun t -> {t with ToleranceLdu=Vec3.create -1 0 0})
+        Assert.Equal("invalid-component-targets",(WalkerPackaging.realize {request with Targets=targets} 1).Head.Gates.Head.Code)
+        Assert.Equal("invalid-obsolete-parts",(WalkerPackaging.realize {request with ObsoletePartIds=["unknown"]} 1).Head.Gates.Head.Code)
+
+    [<Fact>]
+    let ``changing feet or motor clock is rejected before building`` () =
+        let request = fixture ()
+        let badFeet = {request with Program={request.Program with Feet=request.Program.Feet.Tail}}
+        Assert.Equal("changed-walking-requirements",(WalkerPackaging.realize badFeet 1).Head.Gates.Head.Code)
+        let badClock = {request with Drive={request.Drive with MotorClockScale=2.0}}
+        Assert.Equal("changed-walking-requirements",(WalkerPackaging.realize badClock 1).Head.Gates.Head.Code)
+
+    [<Fact>]
+    let ``realization emits physical supports and preserves target and foot definitions`` () =
+        let request = fixture ()
+        let attempts = WalkerPackaging.realize request 2
+        let results = attempts |> List.choose _.Construction
+        Assert.True(not results.IsEmpty,Realization.json(attempts |> List.map _.Gates))
+        for result in results do
+            Assert.True(result.AddedPartIds.Length>0)
+            Assert.True(result.RetainedFramePartIds.Length>0)
+            Assert.True(Grammar.validateAssembly result.Realized.Assembly |> List.isEmpty)
+            Assert.Equal<WalkerFootChoice list>(request.Source.Feet,result.Realized.Genome.Feet)
+            for target in request.Targets do
+                let actual = result.Realized.Genome.Bodies |> List.collect _.Parts |> List.find (fun p -> p.Id=target.Placement.Id)
+                Assert.Equal(target.Placement,actual)
+            for part in result.Realized.Assembly.Parts do
+                if List.contains part.Id request.ObsoletePartIds then
+                    Assert.Equal(Some Axle,(Catalog.get part.Part).Connector)
+                    Assert.Contains(part.Id,result.AddedPartIds)
+            for axle in result.Realized.Genome.Connections |> List.filter (fun c -> (Catalog.get c.Placement.Part).Connector=Some Axle) do
+                let low,high = Catalog.shaftRange axle.Placement.Part
+                let body = result.Screened.Program.Hinges |> List.find (fun h -> h.Id=axle.Hinges.Head)
+                let driven = if body.A.Body=result.Realized.Assembly.Chassis then body.B.Body else body.A.Body
+                let gear = result.Realized.Genome.Bodies |> List.find (fun b -> b.Body=driven) |> _.Parts
+                           |> List.find (fun p -> (Catalog.gearTeeth p.Part).IsSome)
+                Assert.True(axle.Placement.Position.Z+low<=gear.Position.Z-30.0+1e-6)
+                Assert.True(axle.Placement.Position.Z+high>=gear.Position.Z+30.0-1e-6)
+                if driven=request.Drive.Root then
+                    let motor = request.Targets |> List.find (fun t -> t.Placement.Id=request.Source.MotorPart) |> _.Placement
+                    if motor.Rotation.Z.Z>0.0 then Assert.True(axle.Placement.Position.Z+high<=motor.Position.Z+20.0+1e-6)
+                    else Assert.True(axle.Placement.Position.Z+low>=motor.Position.Z-20.0-1e-6)

@@ -240,8 +240,8 @@ def _screen_pending(archive, pending, library, used, payload_profile=None):
             message = f"Native load-only screening rejected {name}: {rejection_detail(report)}"
             archive.db.execute("""
                 UPDATE births SET status='screening-rejected',error=? WHERE status='generated'
-                AND id IN (SELECT birth FROM native_candidates WHERE batch=? AND directory=?)
-            """, (message, pending["batch"], name))
+                AND (id=? OR id IN (SELECT birth FROM native_candidates WHERE batch=? AND directory=?))
+            """, (message, pending["birth"] if name == pending["directory"] else None, pending["batch"], name))
             print(f"ERROR: {message}", file=sys.stderr, flush=True)
     target = next((report for report in screened["results"] if Path(report["candidate"]).name == pending["directory"]), None)
     if target is None:

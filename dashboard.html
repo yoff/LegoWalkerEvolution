@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LegoWalkers dashboard - start and recovery</title>
+  <style>
+    :root { color-scheme: dark; font: 16px/1.6 system-ui, sans-serif; background: #101723; color: #e2eaf7; }
+    body { max-width: 820px; margin: 0 auto; padding: 32px 20px; }
+    h1 { line-height: 1.2; }
+    a { color: #91c7ff; }
+    section { background: #182333; border: 1px solid #31445d; border-radius: 16px; padding: 24px; margin: 24px 0; }
+    pre { background: #101723; padding: 16px; overflow-x: auto; border-radius: 8px; }
+    .button { display: inline-block; background: #21466e; border-radius: 8px; padding: 10px 18px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>LegoWalkers dashboard</h1>
+    <p>This start and recovery page works offline. Bookmark this file so you can find
+      these instructions even when the dashboard server is stopped.</p>
+    <p><a class="button" href="http://127.0.0.1:8788/">Open live dashboard</a>
+      &middot; <a href="http://127.0.0.1:8788/history.html">Updates &amp; history</a></p>
+
+    <section>
+      <h2>If the dashboard will not open</h2>
+      <p>A local Python HTTP server must be running on this computer. If the browser
+        says it cannot connect to <code>127.0.0.1:8788</code>, start that server:</p>
+      <p>Follow the <a href="README.md">setup instructions</a>, then from the repository directory:</p>
+      <pre><code>.venv/bin/python -m legowalkers_sim.seeds --output output/recommended-seeds
+sh scripts/dashboard.sh --dotnet "$(command -v dotnet)" --ldraw-library "$LDRAW_LIBRARY"</code></pre>
+      <p>Wait for <code>Live dashboard: http://127.0.0.1:8788/</code>, then use
+        the link above. The command works from any directory when given the full
+        path to the script. It uses the project's existing Python environment.</p>
+    </section>
+
+    <section>
+      <h2>What runs, and what does not</h2>
+      <ul>
+        <li>The command serves the stable experiment and prepares any needed implementation update.</li>
+        <li>It preserves previous results and unused trial allowance. It does not authorize or run simulations.</li>
+        <li>Simulation and animation workers start only through their separate dashboard buttons.</li>
+        <li>This command configures two independent screening/preflight processes
+          and up to four simulation processes. Each passing realization can proceed
+          without waiting for its siblings; screening and ready work are bounded
+          to four candidates and the remaining trial allowance.</li>
+        <li>Blender is needed only for rendering new animations, not for viewing existing results.</li>
+        <li>Use <kbd>Ctrl+C</kbd> in the server terminal, or terminate the VS Code task,
+          to stop the dashboard. Independently started workers are not stopped by this.</li>
+      </ul>
+      <p>If startup reports a missing environment or another error, inspect the terminal
+        and follow the <a href="README.md">project setup instructions</a>.
+        If the dashboard already opens, another server is running; do not start a duplicate.</p>
+    </section>
+
+    <p>A stopped server cannot deliver a custom HTTP error page. The browser's
+      connection-error page cannot be replaced by this file without another always-running
+      server or browser-specific software. This offline page is the recovery entry point,
+      not a live server-status check.</p>
+  </main>
+</body>
+</html>

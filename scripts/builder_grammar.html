@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The walker builder · An illustrated construction grammar</title>
+<style>
+:root{color-scheme:dark;--bg:#0d1727;--panel:#152338;--ink:#d7e3f5;--muted:#a4b5cd;--line:#30435f;--mint:#56d9bf;--amber:#ffbf69}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:80px}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 system-ui,sans-serif}a{color:var(--mint);text-underline-offset:4px}button,select,input{font:inherit}button,select{background:#213650;color:var(--ink);border:1px solid #6683a5;border-radius:8px;padding:8px 14px}button{cursor:pointer}button:hover{border-color:var(--mint)}button:focus-visible,select:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid var(--amber);outline-offset:4px}
+header{max-width:1280px;margin:auto;padding:50px 30px 24px}main{max-width:1280px;margin:auto;padding:0 30px 65px}nav{position:sticky;top:0;z-index:5;background:#0d1727f5;border-block:1px solid var(--line);backdrop-filter:blur(10px)}nav>div{max-width:1280px;margin:auto;padding:13px 30px;display:flex;gap:24px;flex-wrap:wrap}nav a{font-size:14px;text-decoration:none}h1{font-size:clamp(38px,6vw,72px);line-height:1.05;max-width:850px;letter-spacing:-.04em;margin:18px 0 24px}h2{font-size:clamp(26px,4vw,38px);line-height:1.2;margin:0 0 18px}h3{line-height:1.25;font-size:23px;margin:16px 0}p{margin:12px 0}.eyebrow{color:var(--mint);font:600 13px/1.5 ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase}.lead{font-size:20px;max-width:850px;color:var(--muted)}section{margin-top:65px}.hero,.split{display:grid;grid-template-columns:1.15fr 1fr;gap:30px;align-items:center}.hero img{width:100%;border-radius:16px}.hero figure{margin:0}.metrics{display:flex;gap:25px;flex-wrap:wrap;margin:20px 0}.metrics strong{display:block;font-size:27px;color:var(--mint)}.metrics span{font-size:13px;color:var(--muted)}.note{border-left:3px solid var(--amber);padding:12px 18px;background:#ffbf6908}.small,figcaption{font-size:13px;color:var(--muted)}figcaption{padding:9px 0}.legend{display:flex;gap:20px;flex-wrap:wrap}.legend span::before{content:"";display:inline-block;width:10px;height:10px;background:var(--mint);border-radius:50%;margin-right:8px}.legend .context::before{background:#879cba}.legend .change::before{background:var(--amber)}
+.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}.flow>div,.panel{padding:23px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}.flow strong{color:var(--mint)}.flow p{font-size:14px}.number{font:22px ui-monospace,monospace;color:var(--mint)}.badge{font:12px ui-monospace,monospace;background:#243b55;padding:4px 9px;border-radius:20px}.rule-head{display:flex;justify-content:space-between}.rule[data-category=Experimental] .badge{color:var(--amber)}.rules{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px}.rule{padding:25px;background:var(--panel);border:1px solid var(--line);border-radius:16px;scroll-margin-top:100px}.rule figure{margin:20px 0}.rule svg{width:100%;display:block;max-height:270px}.rule p{font-size:15px}.production{display:block;white-space:normal;overflow-wrap:anywhere;padding:12px;background:#0d1727;border-radius:9px;color:var(--mint);font-size:13px}dt{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--mint);margin-top:14px}dd{margin:5px 0;font-size:14px;color:var(--muted)}details{border-top:1px solid var(--line);padding-top:12px;font-size:13px}summary{cursor:pointer}details a{display:inline-block;margin:9px 0}.filter{display:flex;gap:15px;align-items:center;flex-wrap:wrap;margin:25px 0}.demo svg{height:240px}.demo .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.demo output{font-size:13px;display:block;min-height:42px;margin:8px 0;color:var(--mint)}.witness{background:#f5f8fc;border-radius:14px;overflow:hidden;margin:25px 0}.witness svg{display:block;width:100%;height:auto}.witness figcaption{color:#334961;padding:12px 22px}.media video{width:100%;border-radius:14px;background:#152338}.motion-stage{width:100%;height:auto;border:1px solid var(--line);border-radius:14px;background:var(--panel)}.status-list{padding:0;list-style:none}.status-list li{padding:13px 0;border-bottom:1px solid var(--line)}.status-list b{color:var(--mint)}.status-list .planned b{color:var(--amber)}.footer{margin-top:60px;border-top:1px solid var(--line);padding-top:25px;color:var(--muted);font-size:13px}.search-steps{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:22px 0}.search-step{padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;font-size:13px}.search-step.active{border-color:var(--mint);background:#1b4a46}.search-step.reject{border-color:var(--amber)}[hidden]{display:none!important}.version{font-size:12px;color:var(--muted);overflow-wrap:anywhere}.toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap}code{font-family:ui-monospace,monospace}
+@media(max-width:850px){.hero,.split{grid-template-columns:1fr}.flow{grid-template-columns:1fr 1fr}.search-steps{grid-template-columns:1fr 1fr}.rules{grid-template-columns:1fr}nav>div{gap:12px}header,main{padding-inline:20px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+@media print{nav,.toolbar,.filter,video,.demo button{display:none}body{background:white;color:#172c44}.rule,.panel,.flow>div{break-inside:avoid;background:white;border-color:#bbb}.rules{display:block}.rule{margin:20px 0}.production{color:#172c44;background:#eee}figcaption,dd,.small,.lead{color:#334961}}
+</style>
+</head>
+<body>
+<header>
+<div class="eyebrow">LegoWalkers / construction field guide</div>
+<h1>From a walking idea<br>to connected LEGO.</h1>
+<p class="lead">An illustrated grammar for the builder: the parts it can choose, the promises each choice must keep, and the feedback that makes it search again.</p>
+<p class="version">{{VERSIONS}}</p>
+</header>
+<nav aria-label="Guide sections"><div><a href="#overview">The builder</a><a href="#rules">12 rules</a><a href="#witnesses">Before / after</a><a href="#motion">Motion</a><a href="#search">Search &amp; feedback</a><a href="#evidence">Evidence</a></div></nav>
+<main>
+<section id="overview" class="hero">
+<div>
+<div class="eyebrow">The result, not just the recipe</div><h2>A physically realized,<br>simulation-qualified walker.</h2>
+<p>The builder fills the gap between an abstract linkage and a model with real beams, pins, axles, gears, supports and mounted hardware.</p>
+<div class="metrics"><div><strong>{{FORWARD}} m</strong><span>fresh forward travel</span></div><div><strong>{{CYCLES}} cycles</strong><span>repeatable gait</span></div><div><strong>0.4 Nm</strong><span>motor torque cap</span></div></div>
+<p class="small">{{ARCHIVE}} · Birth 16, Trial 1 · calibrated regulated 9 V XL motor · {{PARTS}} parts · {{MASS}} kg simulated mass.</p>
+<p class="note">Simulation qualification is not hardware certification. This walker runs near the torque cap; battery sag, receiver losses, thermal protection and calibrated external gear losses are not modeled.</p>
+<p><a href="assets/model.ldr" download>Download the real LDraw model</a> &nbsp; <a href="assets/qualification.json">Measured result</a></p>
+</div>
+<figure><img src="assets/walker.png" width="1600" height="1000" alt="LEGO mesh render of the qualified four-foot walker, including battery box, XL motor, gear train and stock-beam supports"><figcaption>Actual LDraw mesh render of the qualified robot. Not a generated concept image or an assembly-order diagram.</figcaption></figure>
+</section>
+<section>
+<h2>Three languages, one construction.</h2>
+<div class="flow"><div><strong>1 / Walking program</strong><p>Bodies, hinges, transmissions, motor clock and logical feet describe the motion to preserve.</p></div><div><strong>2 / Physical productions</strong><p>Stock parts, legal socket stacks, drive planes and bounded brackets realize that program.</p></div><div><strong>3 / Proof obligations</strong><p>Every part and connection needs provenance. New supports create new frame-path obligations.</p></div><div><strong>4 / External tests</strong><p>Exact reconstruction, collision checks and fresh dynamics decide whether the construction is usable.</p></div></div>
+<p class="small">The notation below is a readable summary of the executable F# productions. It is not a second grammar used to generate robots.</p>
+</section>
+<section id="rules">
+<div class="eyebrow">The construction alphabet</div><h2>Twelve rules with hard boundaries.</h2>
+<div class="legend"><span>Connector / motion</span><span class="context">Unchanged context</span><span class="change">Changed or experimental geometry</span></div>
+<div class="filter"><label for="rule-filter">Show rules</label><select id="rule-filter"><option value="">All rules</option><option>Connections</option><option>Packaging</option><option>Drive</option><option>Proof</option><option>Feedback</option><option>Experimental</option></select><output id="rule-count" aria-live="polite">12 rules</output></div>
+<div class="rules">{{RULES}}</div>
+</section>
+<section id="witnesses">
+<div class="eyebrow">Real catalogue-based examples</div><h2>A repair changes the construction,<br>not the intended planar gait.</h2>
+<p>These before/after witnesses come from the saved motif catalogue examples. They show actual catalogue port positions and shaft intervals at matched scale, rather than invented geometry.</p>
+<p class="note">A shorter or reversed smooth pin must still engage exactly the intended bodies and cover their socket walls. A layer shift must recheck every incident pivot. Visual clearance is not a pass.</p>
+{{WITNESSES}}
+<p class="small">The supported parameter ordering is hand-authored. Offline alternatives need manual promotion; the search cannot silently expand the catalogue or relax its checks. {{POLICY_SOURCE}}</p>
+</section>
+<section id="motion">
+<div class="eyebrow">Why the initial pose is not enough</div><h2>The support must miss the whole sweep.</h2>
+<div class="split">
+<div><svg id="sweep-demo" class="motion-stage" viewBox="0 0 560 320" role="img" aria-labelledby="sweep-title"><title id="sweep-title">Illustrative four-bar linkage with a swept crank keepout and alternative support</title><g id="sweep-drawing"></g></svg><div class="toolbar"><button id="sweep-toggle" type="button">Play schematic</button><label>Phase <input id="sweep-phase" type="range" min="0" max="360" value="0"></label><output id="sweep-status"></output></div><p class="small">Illustrative four-bar geometry, not the qualified robot's solved linkage. The dashed crank envelope is an advisory keepout; it does not check every moving part.</p></div>
+<div><h3>Keep motion checks separate from drawings.</h3><p>The builder ranks supports against sampled reference-clock motion and conservative reservations, including shaft envelopes and the motor's side bracket.</p><p>Exact checks still decide acceptance. A zero-time fit, a clear sampled pose, or a complete derivation cannot prove between-sample collision safety.</p><p>The dynamic gate then tests a free chassis with self-collision and designated ground-contact regions. It rejects unsafe prefixes without inventing partial fitness.</p></div>
+</div>
+<div class="media"><h3>Playback of the actual qualified robot</h3><video controls preload="metadata" poster="assets/walker.png" aria-label="Anchored playback of evaluated poses of the qualified LEGO walker"><source src="assets/walker.mp4" type="video/mp4">Your browser does not support this video. <a href="assets/walker.mp4">Download the evaluated-pose playback</a>.</video><p class="small">Rendered from the fresh campaign evaluation's poses. Playback is anchored for viewing; qualification was free-chassis. This is not an assembly animation or a separate dynamics experiment.</p></div>
+</section>
+<section id="search">
+<div class="eyebrow">More than a one-shot generator</div><h2>A failure becomes a reason to search.</h2>
+<p>Inside a scoped packaging run, the coordinator already performs this loop automatically. It does not need a human to pick each replacement support.</p>
+<div class="search-steps" aria-label="Bounded construction search stages"><div class="search-step" data-step="0"><b>1. Choose</b><br>Assign a stock / plane / route.</div><div class="search-step" data-step="1"><b>2. Build</b><br>Record parts, bonds and goals.</div><div class="search-step" data-step="2"><b>3. Check</b><br>Exact oracle names a conflict.</div><div class="search-step" data-step="3"><b>4. Backtrack</b><br>Reopen implicated producers.</div><div class="search-step" data-step="4"><b>5. Recheck</b><br>Try an alternative witness.</div></div>
+<div class="toolbar"><button id="search-next" type="button">Step through an example</button><button id="search-reset" type="button">Reset example</button><output id="search-status" aria-live="polite">Illustrative search trace; no construction or trial is running.</output></div>
+<div class="split" style="margin-top:24px">
+<div class="panel"><h3>What the search learns</h3><p>Reported parts and bodies identify producing choices and dependency paths. Cheap stock/layout alternatives are tried before broader link-layer repairs.</p><p>Only a scoped, exact failed witness becomes a hard nogood. An advisory hint can prioritize alternatives, not ban an entire beam or shaft family.</p><p class="small">Cost-ranked, bounded depth-first continuation; frozen checkpoints and evidence hashes. Exhausting states, frontier or checks is not proof of impossibility.</p><p class="small">{{CONSTRUCTION_SOURCE}}<br>{{SEARCH_SOURCE}}</p></div>
+<div><h3>Where autonomy currently ends</h3><ul class="status-list"><li><b>Automatic:</b> exact collision/connectivity feedback → bounded construction backtracking.</li><li><b>Automatic:</b> safe, consistently backward gait → one motor-direction child → fresh trial. {{FEEDBACK_SOURCE}}</li><li><b>Enumerated mutation:</b> physical gear reduction is available when the current geometry supports it.</li><li class="planned"><b>Not wired yet:</b> slow/stalled torque-limited movement → automatic reduction request → packaging-proof search.</li><li class="planned"><b>Externally directed:</b> new design goals, target tolerances, grammar extensions and policy promotion. The builder selects legal alternatives inside those boundaries.</li></ul></div>
+</div>
+</section>
+<section id="evidence">
+<div class="eyebrow">What actually passed</div><h2>Evidence, limits and reproducibility.</h2>
+<div class="flow"><div><strong>Connectivity</strong><p>Every added chassis part must have a verified rigid path to the retained frame. Every bracket pin needs its own bond.</p></div><div><strong>Joint preservation</strong><p>The retained packaging pilots preserve all 28 articulated pivot obligations. The extended reduced route also passed those checks, but collided.</p></div><div><strong>Fresh qualification</strong><p>{{FORWARD}} m, {{CYCLES}} complete cycles, {{CLOSURE}} mm maximum closure error. No forbidden ground contacts. No imported fitness.</p></div><div><strong>Experimental reduction</strong><p>Reduced-routing v8: four exact layouts rejected for interference; zero full dynamics trials. Its supports are not a qualified geared walker.</p></div></div>
+<p class="note">The grammar is a bounded constructive theory, not a general LEGO CAD solver. It does not certify strength, axial retention, thermal endurance, assembly order or arbitrary chassis designs.</p>
+<p>This page is an offline documentation snapshot. Its interactive diagrams never authorize trials, edit designs or call the campaign API.</p>
+<p><a href="guide-provenance.json">Source versions, asset hashes and evidence provenance</a> · <a href="assets/qualification.json">Full measured qualification result</a></p>
+</section>
+<div class="footer">LegoWalkers builder grammar · real renders + labelled schematics · local assets, no external scripts, fonts or services.<br>Rebuild using <code>PYTHONPATH=simulator .venv/bin/python scripts/build_builder_grammar.py --output output/builder-grammar-v2</code>.</div>
+</main>
+<script src="assets/builder_grammar.js"></script>
+</body>
+</html>

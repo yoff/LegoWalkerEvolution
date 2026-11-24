@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offline mass-and-packaging experiment</title>
+<style>
+  body { font: 16px system-ui,sans-serif; margin: 2rem auto; padding: 0 1rem; max-width: 1200px; color: #243141; background: #fafbfd }
+  h1 { font-size: 1.7rem }
+  .warning { background: #fff0cb; padding: 1rem; border-left: 4px solid #ba7400 }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin: 1rem 0 }
+  select,button { font: inherit; padding: .4rem }
+  input[type=range] { flex: 1; min-width: 200px }
+  .views { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem }
+  canvas { width: 100%; background: white; border: 1px solid #ccd3dd }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0 }
+  th,td { text-align: left; padding: .5rem; border-bottom: 1px solid #ccd3dd }
+  .selected { background: #e0efff }
+  .error { color: #a00000 }
+  @media(max-width:800px) { .views { grid-template-columns: 1fr } }
+</style>
+<h1>Motion-first mass and packaging</h1>
+<p class="warning"><strong>Placement targets, not constructed robots.</strong>
+  Internal leg motion is unchanged. Stance assumes vertical settling at each phase;
+  no contact forces or dynamic stability have been simulated. The inherited frame's
+  mass is held as a surrogate; a new chassis and real mounts remain to be designed.</p>
+<p id="summary"></p>
+<div class="controls">
+  <label>Placement <select id="plan" aria-label="Placement target"></select></label>
+  <button id="play" type="button">Play</button>
+  <label for="phase">Motor phase</label>
+  <input id="phase" type="range" min="0" step="1" value="0">
+  <output id="angle"></output>
+</div>
+<p id="phase-stats"></p>
+<div class="views">
+  <section><h2>Side view (X/Y)</h2><canvas id="side" width="900" height="600" aria-label="Side view of packaging and leg motion"></canvas></section>
+  <section><h2>Top view (X/Z, physical depth)</h2><canvas id="top" width="900" height="600" aria-label="Top view of support and mass distribution"></canvas></section>
+</div>
+<p>Blue: battery. Orange: receiver. Purple: fixed motor. Green: assumed supporting
+  foot regions. Gray: other feet. Black cross: selected COM; red cross: inherited COM.
+  Dashed housings: unbuilt placement targets. The green polygon is this phase's
+  support estimate, <strong>not the swept-foot union</strong>.</p>
+<h2>Comparison</h2>
+<p>Negative support margins mean the COM projection lies outside the assumed support.
+  A lower clearance score is only an approximate ranking. Targets with housing overlap
+  or ground intrusion are not shortlisted; this does not replace physical validation.</p>
+<table><thead><tr><th>Target</th><th>Worst support margin</th><th>Mean COM height</th><th>Outside support phases</th><th>Moving clearance score</th><th>Both within old rail depth span</th></tr></thead><tbody id="comparisons"></tbody></table>
+<h2>Component targets</h2>
+<p>Coordinates and bounds are LDraw units (1 LDU = 0.4 mm). Requested tolerances:
+  +/-10 X, +/-6 Y, +/-10 Z LDU; these tolerance envelopes are <strong>not checked</strong>.</p>
+<table><thead><tr><th>Component</th><th>Mass estimate</th><th>Origin X/Y/Z</th><th>Within old rail depth span</th><th>Moving warning pairs</th></tr></thead><tbody id="components"></tbody></table>
+<h2>Construction requests and limitations</h2>
+<p>The exported plan includes component socket targets, reserved housing volumes
+  and unchanged chassis bearing anchors. It deliberately contains no new LDraw
+  model or admissible realization.</p>
+<ul id="limitations"></ul>
+<p><a href="packaging-plan.json">Full plan and phase evidence</a> |
+  <a href="program.json">Exact inherited motion program</a> |
+  <a href="../mass-properties.json">Part-level mass estimates</a> |
+  <a href="../payload-profile.json">Payload profile</a></p>
+<script type="application/json" id="packaging-data">__PACKAGING_DATA__</script>
+<script>
+"use strict";
+const data = JSON.parse(document.getElementById("packaging-data").textContent);
+const plans = [data.inherited, ...data.plans];
+const selector = document.getElementById("plan");
+const slider = document.getElementById("phase");
+slider.max = data.motionFrames.length - 1;
+const mm = value => `${(value * .4).toFixed(2)} mm`;
+const xyz = p => [p.x,p.y,p.z].map(value => value.toFixed(1)).join(" / ");
+const colors = {"payload-battery":"#2576c9","payload-receiver":"#d87516"};
+let selected = 0, playing = false, lastTick = 0;
+function cell(row, text) { const td = document.createElement("td"); td.textContent = text; row.append(td); }
+for (const [index, plan] of plans.entries()) {
+  const option = document.createElement("option");
+  option.value = index; option.textContent = plan.id; selector.append(option);
+  const row = document.createElement("tr"); row.dataset.index = index;
+  for (const value of [plan.id, mm(plan.worstMarginLdu), mm(plan.meanHeightLdu),
+       `${plan.outsideSupportPhases}/${data.motionFrames.length}`,
+       plan.movingClearanceScore.toFixed(3), plan.targets.every(t => t.insideInheritedRailPlanes) ? "yes" : "no"]) cell(row,value);
+  document.getElementById("comparisons").append(row);
+}
+for (const text of data.limitations) { const li = document.createElement("li"); li.textContent = text; document.getElementById("limitations").append(li); }
+document.getElementById("summary").textContent =
+  `${data.counts.combinedTargets} combined placement targets, ${data.counts.housingCompatibleTargets} housing/ground compatible, ` +
+  `${data.counts.selectedTargets} shortlisted; ${data.totalMassKg.toFixed(3)} kg estimated total. ` +
+  `${data.motionFrames.length} sampled phases, ${data.motionCoverage.motorTurnsCovered.toFixed(2)} motor turns. Zero generated robots; zero physics trials.`;
+if (!data.motionCoverage.endpointRepeats || data.motionCoverage.samplingFailure) {
+  const warning = document.createElement("p"); warning.className = "warning";
+  warning.textContent = `Incomplete motion coverage: ${data.motionCoverage.samplingFailure || "endpoint does not repeat"}. No whole-cycle conclusions.`;
+  document.getElementById("summary").after(warning);
+}
+if (!data.plans.length) {
+  const warning = document.createElement("p"); warning.className = "warning";
+  warning.textContent = "No housing/ground-compatible targets in this bounded search. Only the inherited reference is shown.";
+  document.getElementById("summary").after(warning);
+}
+const points = data.motionFrames.flatMap(f => [...f.feet.map(p => p.position), ...f.links.flat()]);
+for (const plan of plans) { points.push(...plan.targets.flatMap(t => [t.low,t.high]), ...plan.phases.map(p => p.center)); }
+points.push(data.motor.low,data.motor.high);
+function draw(canvas, axis, frame, phase, reference) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas rendering unavailable.");
+  const minX = Math.min(...points.map(p=>p.x))-20, maxX = Math.max(...points.map(p=>p.x))+20;
+  const minV = Math.min(...points.map(p=>p[axis]))-20, maxV = Math.max(...points.map(p=>p[axis]))+20;
+  const scale = Math.min((canvas.width-60)/(maxX-minX), (canvas.height-60)/(maxV-minV));
+  const position = p => [30+(p.x-minX)*scale,30+(p[axis]-minV)*scale];
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  function path(list, stroke, fill, close=false) {
+    if (!list.length) return;
+    ctx.beginPath(); list.forEach((p,i)=>{ const [x,y]=position(p); if(i) ctx.lineTo(x,y); else ctx.moveTo(x,y); });
+    if(close) ctx.closePath(); if(fill) {ctx.fillStyle=fill;ctx.fill();} ctx.strokeStyle=stroke;ctx.stroke();
+  }
+  ctx.lineWidth=2;
+  for(const link of frame.links) path(link,"#8a99aa",null);
+  if(axis==="z") path(frame.supportHull,"#168048","#c7ecd399",true);
+  if(axis==="y") path([{x:minX,y:frame.groundY},{x:maxX,y:frame.groundY}],"#168048",null);
+  for(const foot of frame.feet) {
+    const [x,y]=position(foot.position); const active=frame.stanceFeet.includes(foot.id);
+    ctx.beginPath();ctx.arc(x,y,Math.max(3,foot.radius*scale),0,2*Math.PI);
+    ctx.fillStyle=active?"#168048":"#c8ced5";ctx.fill();
+  }
+  function box(low,high,color,dashed) {
+    const [x,y]=position(low),[right,bottom]=position(high);
+    ctx.strokeStyle=color;ctx.setLineDash(dashed?[8,5]:[]);ctx.strokeRect(x,y,right-x,bottom-y);ctx.setLineDash([]);
+  }
+  box(data.motor.low,data.motor.high,"#8255a7",false);
+  for(const target of plans[selected].targets) box(target.low,target.high,colors[target.id],selected!==0);
+  function cross(center,color) { const [x,y]=position(center);ctx.strokeStyle=color;ctx.beginPath();ctx.moveTo(x-7,y);ctx.lineTo(x+7,y);ctx.moveTo(x,y-7);ctx.lineTo(x,y+7);ctx.stroke(); }
+  cross(reference.center,"#b33434"); cross(phase.center,"#111");
+}
+function render() {
+  const plan=plans[selected], index=Number(slider.value), frame=data.motionFrames[index], phase=plan.phases[index];
+  const reference=data.inherited.phases[index];
+  document.getElementById("angle").textContent=`${(frame.inputAngleRadians*180/Math.PI).toFixed(1)} deg`;
+  document.getElementById("phase-stats").textContent=
+    `This phase: support margin ${mm(phase.marginLdu)} (inherited ${mm(reference.marginLdu)}); ` +
+    `COM height ${mm(phase.heightLdu)}; ${frame.stanceFeet.length} assumed contact regions.`;
+  draw(document.getElementById("side"),"y",frame,phase,reference);
+  draw(document.getElementById("top"),"z",frame,phase,reference);
+  for(const row of document.querySelectorAll("#comparisons tr")) row.classList.toggle("selected",Number(row.dataset.index)===selected);
+  const tbody=document.getElementById("components");tbody.replaceChildren();
+  for(const target of plan.targets) {
+    const row=document.createElement("tr");
+    for(const value of [target.id,`${(target.massKg*1000).toFixed(1)} g`,xyz(target.position),
+         target.insideInheritedRailPlanes?"yes":"no",target.movingClearance.suspectPairs]) cell(row,value);
+    tbody.append(row);
+  }
+}
+selector.addEventListener("change",()=>{selected=Number(selector.value);render();});
+slider.addEventListener("input",()=>{playing=false;document.getElementById("play").textContent="Play";render();});
+document.getElementById("play").addEventListener("click",()=>{playing=!playing;document.getElementById("play").textContent=playing?"Pause":"Play";});
+function tick(time) {
+  if(playing && time-lastTick>100) { slider.value=(Number(slider.value)+1)%data.motionFrames.length;lastTick=time;render(); }
+  requestAnimationFrame(tick);
+}
+render();requestAnimationFrame(tick);
+</script>
+</html>

@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Combined motor, transmission and packaging experiment</title>
+<style>
+body{font:16px system-ui,sans-serif;max-width:1250px;margin:2rem auto;padding:0 1rem;color:#243141;background:#fafbfd}
+h1{font-size:1.7rem}.warning{background:#fff0cb;border-left:4px solid #ba7400;padding:1rem}
+.controls{display:flex;flex-wrap:wrap;gap:1rem;align-items:center;margin:1rem 0}
+select,button{font:inherit;padding:.4rem}input[type=range]{flex:1;min-width:180px}
+.views{display:grid;grid-template-columns:1fr 1fr;gap:1rem}canvas{width:100%;background:white;border:1px solid #ccd3dd}
+table{width:100%;border-collapse:collapse;margin:1rem 0}td,th{padding:.5rem;text-align:left;border-bottom:1px solid #ccd3dd}
+.selected{background:#e0efff}tbody tr[data-id]{cursor:pointer}.error{color:#a00000}
+@media(max-width:800px){.views{grid-template-columns:1fr}table{font-size:.85rem}}
+</style>
+<h1>Motor + rebuilt transmission + mass packaging</h1>
+<p class="warning"><strong>Offline targets, not constructed walkers.</strong>
+Walking motion is unchanged. Every new drive part is included in the mass ledger,
+but new bearings, mounts and chassis are unbuilt. Inherited frame/support mass is a
+common surrogate. Clearance and per-phase support estimates are advisory, not
+dynamic stability or continuous collision proofs.</p>
+<p id="summary"></p>
+<div class="controls">
+<label>Motor layout <select id="drive" aria-label="Motor layout"></select></label>
+<label>Trade-off <select id="plan" aria-label="Combined placement"></select></label>
+<button id="play" type="button">Play</button>
+<label for="phase">Walking reference phase</label>
+<input id="phase" type="range" min="0" step="1" value="0"><output id="angle"></output>
+</div>
+<p id="phase-stats"></p>
+<p id="result-warning" class="warning"></p>
+<div class="views">
+<section><h2>Side view (X/Y)</h2><canvas id="side" width="900" height="600" aria-label="Side view of combined packaging and walking motion"></canvas></section>
+<section><h2>Top view (X/Z, physical depth)</h2><canvas id="top" width="900" height="600" aria-label="Top view of combined packaging, shafts and support"></canvas></section>
+</div>
+<p>Blue: battery. Orange: receiver. Purple: motor. Gold: new gears. Gray: axle envelopes and moving leg cores.
+Green: this phase's assumed supporting contacts. Black cross: selected COM. Red cross: inherited COM.
+All diagrams use common scales; dashed housings are unbuilt targets. Gear boxes/circles are
+rotation-invariant envelopes, not LEGO meshes.</p>
+<h2>Shortlisted trade-offs</h2>
+<p>Per motor layout: two best clearance-first and two best support-first targets, deduplicated.
+Negative margins are outside the assumed support polygon. Mean height is phase-weighted,
+not an equally weighted average of refined samples. Click a row to select it.</p>
+<table><thead><tr><th>Target</th><th>Worst support margin</th><th>Mean COM height</th><th>Outside support samples</th><th>Clearance score (LDU squared)</th><th>Estimated mass</th></tr></thead><tbody id="comparisons"></tbody></table>
+<h2>Component targets</h2>
+<p>Origin coordinates are LDU (1 LDU = 0.4 mm). Requested placement tolerance
++/-10 X, +/-6 Y, +/-10 Z is not itself clearance-tested.
+Within the old rail depth span does not establish mounting or chassis feasibility.</p>
+<table><thead><tr><th>Component</th><th>Mass estimate</th><th>Origin X/Y/Z</th><th>Within old rail depth span</th><th>Housing-motion warning pairs</th></tr></thead><tbody id="components"></tbody></table>
+<h2>Mass ledger and construction obligations</h2>
+<p id="mass-ledger"></p><p id="drive-ledger"></p><p id="links"></p>
+<h2>Clearance warnings</h2>
+<p>Scores include every suspect pair before display truncation. Phase buttons seek
+the minimum sampled gap; static hardware conflicts have no motion phase.
+Near-contact warnings can exist without envelope penetration.</p>
+<p id="warnings-summary"></p>
+<table><thead><tr><th>Pair</th><th>Approximation</th><th>Minimum gap</th><th>Phase</th></tr></thead><tbody id="warnings"></tbody></table>
+<h2>Limitations</h2><ul id="limitations"></ul>
+<p><a href="combined-plan.json">Full plan and phase evidence</a> |
+<a href="walking-reference.json">Unchanged walking reference</a> |
+<a href="../combined-input.json">Measured drive inputs and source ledger</a></p>
+<script type="application/json" id="combined-data">__COMBINED_DATA__</script>
+<script>
+"use strict";
+const data=JSON.parse(document.getElementById("combined-data").textContent);
+const plans=[data.reference,...data.plans], driveSelect=document.getElementById("drive"),
+planSelect=document.getElementById("plan"), slider=document.getElementById("phase");
+const drives=new Map([["inherited",data.sourceDrive],...data.drives.map(d=>[d.id,d])]);
+const mm=n=>`${(n*.4).toFixed(2)} mm`,kg=n=>`${n.toFixed(3)} kg`;
+const xyz=p=>[p.x,p.y,p.z].map(n=>n.toFixed(1)).join(" / ");
+const colors={"payload-battery":"#2576c9","payload-receiver":"#d87516"};
+let selected=plans[0],playing=false,lastTick=0;
+slider.max=data.motionFrames.length-1;
+function cell(row,text){const td=document.createElement("td");td.textContent=text;row.append(td);return td;}
+function option(select,value,text){const o=document.createElement("option");o.value=value;o.textContent=text;select.append(o);}
+function choose(id){
+  selected=plans.find(p=>p.id===id);
+  if(!selected)throw new Error(`Unknown combined target: ${id}`);
+  driveSelect.value=selected.driveId;populatePlans();planSelect.value=selected.id;render();
+}
+function populatePlans(){
+  planSelect.replaceChildren();
+  for(const plan of plans.filter(p=>p.driveId===driveSelect.value)){
+    option(planSelect,plan.id,`${plan.id}: ${mm(plan.metrics.worstMarginLdu)}, score ${plan.metrics.clearanceScore.toFixed(1)}`);
+  }
+}
+option(driveSelect,"inherited","Inherited reference");
+for(const drive of data.drives)option(driveSelect,drive.id,`${drive.id} (${drive.motorSpeed.toFixed(1)} rad/s)`);
+for(const plan of plans){
+  const row=document.createElement("tr");row.dataset.id=plan.id;
+  const m=plan.metrics;
+  for(const value of [plan.id,mm(m.worstMarginLdu),mm(m.meanHeightLdu),
+    `${m.outsideSupportPhases}/${data.motionFrames.length}`,m.clearanceScore.toFixed(3),kg(plan.totalMassKg)])cell(row,value);
+  row.addEventListener("click",()=>choose(plan.id));document.getElementById("comparisons").append(row);
+}
+for(const text of data.limitations){const li=document.createElement("li");li.textContent=text;document.getElementById("limitations").append(li);}
+document.getElementById("summary").textContent=
+`${data.counts.combinedTargets.toLocaleString()} combinations across ${data.counts.motorLayouts} interior motor layouts; `+
+`${data.counts.compatibleTargets.toLocaleString()} housing/ground-compatible, ${data.counts.selectedTargets} shortlisted. `+
+`${data.motionFrames.length} reference poses; ${data.counts.uniqueDrivePrograms} independently solved drive programs. Zero physics trials.`;
+if(!data.motionCoverage.endpointRepeats||data.motionCoverage.samplingFailure){
+  const p=document.createElement("p");p.className="warning";
+  p.textContent=`Incomplete cycle coverage: ${data.motionCoverage.samplingFailure||"endpoint does not repeat"}.`;
+  document.getElementById("summary").after(p);
+}
+for(const drive of data.drives.filter(d=>!d.selectedTargets)){
+  const p=document.createElement("p");p.className="warning";p.textContent=`${drive.id}: no housing/ground-compatible targets in this bounded grid.`;
+  document.getElementById("summary").after(p);
+}
+const points=data.motionFrames.flatMap(f=>[...f.feet.map(f=>f.position),...f.links.flat()]);
+for(const plan of plans)points.push(...plan.targets.flatMap(t=>[t.low,t.high]),...plan.phases.map(p=>p.center));
+for(const drive of drives.values())points.push(...drive.envelopes.flatMap(e=>[e.low,e.high]));
+const minX=Math.min(...points.map(p=>p.x))-20,maxX=Math.max(...points.map(p=>p.x))+20;
+function draw(canvas,axis,frame,index){
+  const ctx=canvas.getContext("2d");if(!ctx)throw new Error("Canvas rendering unavailable.");
+  const minV=Math.min(...points.map(p=>p[axis]))-20,maxV=Math.max(...points.map(p=>p[axis]))+20;
+  const scale=Math.min((canvas.width-60)/(maxX-minX),(canvas.height-60)/(maxV-minV));
+  const project=p=>[30+(p.x-minX)*scale,30+(p[axis]-minV)*scale];
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  function path(list,stroke,fill,close=false){
+    if(!list.length)return;ctx.beginPath();
+    list.forEach((p,i)=>{const [x,y]=project(p);if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);});
+    if(close)ctx.closePath();if(fill){ctx.fillStyle=fill;ctx.fill();}ctx.strokeStyle=stroke;ctx.stroke();
+  }
+  function box(low,high,color,dashed){
+    const [x,y]=project(low),[right,bottom]=project(high);
+    ctx.setLineDash(dashed?[8,5]:[]);ctx.fillStyle=color+"22";ctx.strokeStyle=color;
+    ctx.fillRect(x,y,right-x,bottom-y);ctx.strokeRect(x,y,right-x,bottom-y);ctx.setLineDash([]);
+  }
+  ctx.lineWidth=2;
+  for(const link of frame.links)path(link,"#8a99aa",null);
+  if(axis==="z")path(frame.supportHull,"#168048","#c7ecd399",true);
+  else path([{x:minX,y:frame.groundY},{x:maxX,y:frame.groundY}],"#168048",null);
+  for(const foot of frame.feet){
+    const [x,y]=project(foot.position);ctx.beginPath();ctx.arc(x,y,Math.max(3,foot.radius*scale),0,2*Math.PI);
+    ctx.fillStyle=frame.stanceFeet.includes(foot.id)?"#168048":"#c8ced5";ctx.fill();
+  }
+  const drive=drives.get(selected.driveId),gearAngles=new Map(drive.gearAngles[index].map(t=>[t.item1,t.item2]));
+  for(const envelope of drive.envelopes){
+    const gear=envelope.kind==="gear";box(envelope.low,envelope.high,gear?"#aa7a16":"#626e7d",false);
+    if(gear&&axis==="y"){
+      const center={x:(envelope.low.x+envelope.high.x)/2,y:(envelope.low.y+envelope.high.y)/2};
+      const [x,y]=project(center);ctx.beginPath();ctx.arc(x,y,envelope.radius*scale,0,2*Math.PI);ctx.strokeStyle="#aa7a16";ctx.stroke();
+      const angle=gearAngles.get(envelope.id);
+      if(!Number.isFinite(angle))throw new Error(`Missing gear phase: ${envelope.id}`);
+      path([center,{x:center.x+envelope.radius*Math.cos(angle),y:center.y+envelope.radius*Math.sin(angle)}],"#aa7a16",null);
+    }
+    if(!gear)path([envelope.segmentStart,envelope.segmentEnd],"#626e7d",null);
+  }
+  for(const target of selected.targets)box(target.low,target.high,colors[target.id]||"#8c52af",true);
+  function cross(point,color){
+    const [x,y]=project(point);ctx.strokeStyle=color;ctx.lineWidth=3;ctx.beginPath();
+    ctx.moveTo(x-7,y);ctx.lineTo(x+7,y);ctx.moveTo(x,y-7);ctx.lineTo(x,y+7);ctx.stroke();
+  }
+  cross(data.reference.phases[index].center,"#bf3340");cross(selected.phases[index].center,"#16202e");
+}
+function render(){
+  const index=Number(slider.value),frame=data.motionFrames[index],phase=selected.phases[index];
+  const drive=drives.get(selected.driveId);
+  const driveWarnings=selected.clearance.filter(c=>c.family==="moving-drive-link").length;
+  document.getElementById("result-warning").textContent=
+    (driveWarnings?`${driveWarnings} rebuilt gear/shaft-to-moving-link proxy warnings remain. Improved COM does not establish a viable drive construction. `:
+      `${selected.clearance.length} housing/drive clearance warning pairs remain. `)+
+    `COM is outside the assumed support in ${selected.metrics.outsideSupportPhases}/${data.motionFrames.length} sampled poses. No dynamic stability qualification.`;
+  document.getElementById("angle").textContent=`${(frame.inputAngleRadians*180/Math.PI).toFixed(1)} degrees`;
+  document.getElementById("phase-stats").textContent=
+    `COM ${xyz(phase.center)} LDU; support margin ${mm(phase.marginLdu)}; height ${mm(phase.heightLdu)}. `+
+    `${frame.stanceFeet.length} assumed contact regions. `+
+    (selected.driveId==="inherited"?"Inherited +3 rad/s command.":`Motor command ${drive.motorSpeed.toFixed(1)} rad/s; walking reference unchanged.`);
+  for(const row of document.querySelectorAll("#comparisons tr"))row.classList.toggle("selected",row.dataset.id===selected.id);
+  const components=document.getElementById("components");components.replaceChildren();
+  for(const t of selected.targets){
+    const row=document.createElement("tr");
+    for(const v of [t.id,kg(t.massKg),xyz(t.position),t.insideInheritedRailPlanes?"yes":"no",t.movingClearance.suspectPairs])cell(row,v);
+    components.append(row);
+  }
+  const ledger=data.massLedger;
+  document.getElementById("mass-ledger").textContent=
+    `Source ${kg(ledger.sourceTotalMassKg)}: ${ledger.removedLegacyIds.length} obsolete gears/axles/bushings (${kg(ledger.removedLegacyMassKg)}) `+
+    `removed; ${ledger.heldPartIds.length} retained parts (${kg(ledger.heldMassKg)}) held as the frame/link/mount surrogate. `+
+    `Battery, receiver and motor are counted once at their selected positions.`;
+  document.getElementById("drive-ledger").textContent=selected.driveId==="inherited"?
+    "Inherited comparison uses its complete original ledger and the same clearance approximations.":
+    `${drive.stockParts.length} rebuilt stock parts: gear/axle mass ${kg(drive.transmissionMassKg)}; `+
+    `known total ${kg(drive.totalMassKg)}. ${drive.bearingTargets.length} requested bearing centers; bearing blocks, spacers, mounts and new frame mass are unknown.`;
+  const links=document.getElementById("links");links.replaceChildren();
+  if(selected.driveId!=="inherited"){
+    for(const [label,href] of [["Combined incomplete LDraw target",`${selected.id}.ldr`],
+      ["Transmission subassembly",`drives/${selected.driveId}/transmission.ldr`],
+      ["Motor drive program",`drives/${selected.driveId}/drive-program.json`]]){
+      const a=document.createElement("a");a.textContent=label;a.href=href;links.append(a,document.createTextNode("  "));
+    }
+  }
+  document.getElementById("warnings-summary").textContent=
+    `${selected.clearance.length} displayed-evidence warning pairs; score ${selected.metrics.clearanceScore.toFixed(3)} LDU squared. `+
+    (selected.clearance.length?"Showing the 40 smallest sampled gaps.":"No suspect pairs in these approximations; this is not safety qualification.");
+  const warnings=document.getElementById("warnings");warnings.replaceChildren();
+  for(const warning of selected.clearance.slice(0,40)){
+    const row=document.createElement("tr");cell(row,`${warning.partA} / ${warning.partB}`);cell(row,warning.family);cell(row,mm(warning.clearanceLdu));
+    const td=cell(row,warning.static?"Static":"");
+    if(!warning.static){
+      const button=document.createElement("button");button.type="button";
+      button.textContent=`${(warning.inputAngleRadians*180/Math.PI).toFixed(1)} degrees`;
+      button.addEventListener("click",()=>{
+        playing=false;document.getElementById("play").textContent="Play";
+        const nearest=data.motionFrames.reduce((best,f,i)=>Math.abs(f.inputAngleRadians-warning.inputAngleRadians)<
+          Math.abs(data.motionFrames[best].inputAngleRadians-warning.inputAngleRadians)?i:best,0);
+        slider.value=nearest;render();
+      });td.append(button);
+    }warnings.append(row);
+  }
+  draw(document.getElementById("side"),"y",frame,index);draw(document.getElementById("top"),"z",frame,index);
+}
+driveSelect.addEventListener("change",()=>{populatePlans();if(planSelect.options.length)choose(planSelect.value);});
+planSelect.addEventListener("change",()=>choose(planSelect.value));
+slider.addEventListener("input",render);
+document.getElementById("play").addEventListener("click",()=>{
+  playing=!playing;lastTick=0;document.getElementById("play").textContent=playing?"Pause":"Play";
+});
+function animate(time){
+  if(playing&&time-lastTick>70){lastTick=time;slider.value=(Number(slider.value)+1)%data.motionFrames.length;render();}
+  requestAnimationFrame(animate);
+}
+choose("inherited");requestAnimationFrame(animate);
+</script>
+</html>

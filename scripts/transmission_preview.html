@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Birth 15 fresh transmission construction</title>
+<style>
+body { font: 16px system-ui,sans-serif; max-width: 1200px; margin: 2rem auto; padding: 0 1rem; color: #243141; background: #fafbfd }
+.warning { background: #fff0cb; border-left: 4px solid #ba7400; padding: 1rem }
+.controls { display:flex; flex-wrap:wrap; align-items:center; gap:1rem; margin:1rem 0 }
+select,button { font:inherit; padding:.4rem } input { flex:1; min-width:200px }
+.views { display:grid; grid-template-columns:1fr 1fr; gap:1rem }
+canvas { width:100%; background:white; border:1px solid #ccd3dd }
+table { border-collapse:collapse; width:100% } th,td { padding:.4rem; text-align:left; border-bottom:1px solid #ccd3dd }
+@media(max-width:800px) { .views { grid-template-columns:1fr } }
+</style>
+<h1>Construct transmission from walking demands</h1>
+<p class="warning"><strong>Offline transmission subassemblies, not complete robots.</strong>
+Every gear and axle is constructed afresh. Walking motion is checked against the
+original clock, even when the motor must run in the opposite direction. New
+bearings, chassis and mounting parts are still required; collisions and dynamics
+are not qualified.</p>
+<p id="summary"></p>
+<div class="controls">
+  <label>Motor and drive layout <select id="layout" aria-label="Motor and drive layout"></select></label>
+  <label for="phase">Original walking phase</label>
+  <input id="phase" type="range" min="0" value="0" step="1">
+  <output id="angle"></output>
+</div>
+<p id="stats"></p>
+<div class="views">
+  <section><h2>Drive axes (X/Y)</h2><canvas id="side" width="900" height="600" aria-label="Constructed gear route"></canvas></section>
+  <section><h2>Physical depth (X/Z)</h2><canvas id="top" width="900" height="600" aria-label="Motor housing and shaft depths"></canvas></section>
+</div>
+<p>Blue circles: newly constructed 24T gears. Orange box: motor housing.
+Green axes: required walking outputs. Gray dots: inherited gear positions.
+Red dots: unchanged foot trajectories. Lines between gears represent only
+explicitly constructed meshes. Every blue gear must serve at least one mesh.</p>
+<h2>Motion and part accounting</h2>
+<table><thead><tr><th>Layout</th><th>Gears / meshes</th><th>Discarded now-unneeded gears</th><th>Motor command</th><th>Foot error</th><th>Motor within old rail depth span</th></tr></thead><tbody id="comparisons"></tbody></table>
+<h2>Selected construction obligations</h2><ul id="obligations"></ul>
+<p id="links"></p>
+<h2>Scope and limitations</h2><ul id="limitations"></ul>
+<p><a href="transmission-plan.json">Full drive plan and motion comparisons</a> |
+<a href="walking-reference.json">Unchanged walking reference</a></p>
+<script id="drive-data" type="application/json">__DRIVE_DATA__</script>
+<script>
+"use strict";
+const data=JSON.parse(document.getElementById("drive-data").textContent);
+const selector=document.getElementById("layout"), slider=document.getElementById("phase");
+let index=0;
+if(!data.layouts.length) throw new Error("No drive layouts were constructed.");
+slider.max=data.layouts[0].frames.length-1;
+function cell(row,text) { const td=document.createElement("td");td.textContent=text;row.append(td); }
+for(const [i,layout] of data.layouts.entries()) {
+  const option=document.createElement("option");option.value=i;option.textContent=layout.id;selector.append(option);
+  const row=document.createElement("tr");
+  for(const value of [layout.id,`${layout.gears.length} / ${layout.meshes.length}`,
+    layout.discardedUnneededSourceGears.join(", ")||"none",
+    `${layout.motor.speed.toFixed(1)} rad/s`,
+    `${layout.comparison.maxFootPositionErrorLdu.toExponential(2)} LDU`,
+    layout.motor.withinInheritedRailDepthSpan?"yes":"no"]) cell(row,value);
+  document.getElementById("comparisons").append(row);
+}
+document.getElementById("summary").textContent=
+  `${data.demands.length} required output rotations; ${data.inherited.gearCount} inherited gears `+
+  `(${data.inherited.orphanGearIds.length} without a declared mesh). `+
+  `${data.counts.layoutChoices} constructed layouts; ${data.counts.rejectedHousingChoices} rejected for load shafts passing through the motor. `+
+  `${data.counts.sampledReferencePhases} compared phases; zero physics trials.`;
+for(const text of data.limitations) { const li=document.createElement("li");li.textContent=text;document.getElementById("limitations").append(li); }
+if(!data.motionCoverage.endpointRepeats || data.motionCoverage.samplingFailure) {
+  const p=document.createElement("p");p.className="warning";
+  p.textContent=`Incomplete reference cycle coverage: ${data.motionCoverage.samplingFailure||"endpoint does not repeat"}.`;
+  document.getElementById("summary").after(p);
+}
+const points=data.layouts.flatMap(layout=>[layout.motor.low,layout.motor.high,
+  ...layout.route.nodes.map(n=>n.position),...layout.shafts.flatMap(s=>[{...s.placement.position,z:s.minimumReachZ},{...s.placement.position,z:s.maximumReachZ}]),
+  ...layout.frames.flatMap(f=>f.feet)]);
+function draw(canvas,axis,layout,frame) {
+  const ctx=canvas.getContext("2d"); if(!ctx) throw new Error("Canvas unavailable.");
+  const minX=Math.min(...points.map(p=>p.x))-40,maxX=Math.max(...points.map(p=>p.x))+40;
+  const minV=Math.min(...points.map(p=>p[axis]))-40,maxV=Math.max(...points.map(p=>p[axis]))+40;
+  const scale=Math.min((canvas.width-60)/(maxX-minX),(canvas.height-60)/(maxV-minV));
+  const pos=p=>[30+(p.x-minX)*scale,30+(p[axis]-minV)*scale];
+  ctx.clearRect(0,0,canvas.width,canvas.height);ctx.lineWidth=2;
+  function line(a,b,color) { const [x,y]=pos(a),[u,v]=pos(b);ctx.strokeStyle=color;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(u,v);ctx.stroke(); }
+  function dot(p,r,color) { const [x,y]=pos(p);ctx.fillStyle=color;ctx.beginPath();ctx.arc(x,y,r*scale,0,2*Math.PI);ctx.fill(); }
+  for(const p of data.inherited.gearPositions) dot(p,3,"#aab3bd");
+  for(const foot of frame.feet) dot(foot,4,"#bf4545");
+  const gearPositions=new Map(layout.gears.map(g=>[g.placement.body,g.placement.position]));
+  for(const edge of layout.route.edges) line(gearPositions.get(edge.input),gearPositions.get(edge.output),"#7591ac");
+  for(const shaft of layout.shafts) {
+    const p=shaft.placement.position;
+    if(axis==="z") line({...p,z:shaft.minimumReachZ},{...p,z:shaft.maximumReachZ},"#536777");
+  }
+  const angles=new Map(frame.gearAngles.map(pair=>[pair.item1,pair.item2]));
+  for(const gear of layout.gears) {
+    const p=gear.placement.position,[x,y]=pos(p);
+    ctx.strokeStyle="#2576c9";
+    if(axis==="y") {
+      ctx.beginPath();ctx.arc(x,y,30*scale,0,2*Math.PI);ctx.stroke();
+      const angle=angles.get(gear.placement.body);
+      line(p,{...p,x:p.x+25*Math.cos(angle),y:p.y+25*Math.sin(angle)},"#2576c9");
+    } else ctx.strokeRect(x-30*scale,y-5*scale,60*scale,10*scale);
+  }
+  for(const demand of data.demands) dot({...demand.position,z:layout.meshes[0]?.planeZ||0},5,"#19804d");
+  const [x,y]=pos(layout.motor.low),[u,v]=pos(layout.motor.high);
+  ctx.strokeStyle="#d87516";ctx.setLineDash([8,5]);ctx.strokeRect(x,y,u-x,v-y);ctx.setLineDash([]);
+}
+function render() {
+  const layout=data.layouts[index],frame=layout.frames[Number(slider.value)];
+  document.getElementById("angle").textContent=`${(frame.referenceInputAngle*180/Math.PI).toFixed(1)} deg`;
+  document.getElementById("stats").textContent=
+    `${layout.gears.length} fresh gears, ${layout.meshes.length} explicit meshes. `+
+    `Motor command ${layout.motor.speed.toFixed(1)} rad/s; original command ${layout.comparison.referenceMotorSpeed.toFixed(1)} rad/s. `+
+    `Maximum foot-path difference ${layout.comparison.maxFootPositionErrorLdu.toExponential(2)} LDU. `+
+    `Whole-walker balance must be recomputed after chassis construction.`;
+  draw(document.getElementById("side"),"y",layout,frame);draw(document.getElementById("top"),"z",layout,frame);
+  const ul=document.getElementById("obligations");ul.replaceChildren();
+  for(const text of layout.unconstructed) { const li=document.createElement("li");li.textContent=text;ul.append(li); }
+  const links=document.getElementById("links");links.replaceChildren();
+  for(const [name,path] of [["Transmission LDraw subassembly","transmission.ldr"],["Drive program","drive-program.json"],["Parts and bearing requests","transmission.json"]]) {
+    const a=document.createElement("a");a.textContent=name;a.href=`${layout.id}/${path}`;links.append(a,document.createTextNode(" | "));
+  }
+}
+selector.addEventListener("change",()=>{index=Number(selector.value);render();});
+slider.addEventListener("input",render);
+render();
+</script>
+</html>

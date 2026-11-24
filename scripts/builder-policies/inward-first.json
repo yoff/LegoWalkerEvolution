@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "motifOrder": ["smooth-passive-pivot", "passive-link-layer-clearance"],
+  "pinOrder": ["32002.dat", "3673.dat", "32556.dat"],
+  "layerOffsets": [-10, 10, -20, 20],
+  "clearanceFirst": true
+}

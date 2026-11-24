@@ -156,10 +156,7 @@ def test_backward_gait_generates_one_normal_control_only_repair_then_is_measured
     archive.db.close()
 
 
-def setup_discovery(tmp_path, monkeypatch, budget=3, rejected_checks=False, screening_workers=1, replacement=False):
-    source, data = native_fixture(tmp_path)
-    archive = Archive(tmp_path / "archive")
-    base = protocol()
+def mock_constructor(tmp_path, monkeypatch, base):
     from legowalkers_sim import motion_carry
     binaries = {}
     for name in ("LegoWalkers.Cli.dll", "LegoWalkers.Core.dll"):
@@ -169,6 +166,13 @@ def setup_discovery(tmp_path, monkeypatch, budget=3, rejected_checks=False, scre
     base["generatorBinarySha256"] = binaries
     monkeypatch.setattr(Proposals, "command", ["dotnet", str(tmp_path / "LegoWalkers.Cli.dll")], raising=False)
     monkeypatch.setattr(motion_carry, "_centering", lambda *args: (None, None))
+
+
+def setup_discovery(tmp_path, monkeypatch, budget=3, rejected_checks=False, screening_workers=1, replacement=False):
+    source, data = native_fixture(tmp_path)
+    archive = Archive(tmp_path / "archive")
+    base = protocol()
+    mock_constructor(tmp_path, monkeypatch, base)
     if replacement:
         base["evaluation"] = {"short_gate": 2}
     archive.initialize(native_episode.native_protocol(base, source, discover=True, screening_workers=screening_workers),

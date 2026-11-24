@@ -16,7 +16,7 @@ from legowalkers_sim.evolution import Archive
 from legowalkers_sim.gallery import publish
 from legowalkers_sim.observations import PHYSICS_SOURCES, evaluation_signature, reuse_observations
 from test_evolution import protocol, result
-from test_native_discovery import Proposals
+from test_native_discovery import Proposals, mock_constructor
 from test_native_episode import native_fixture
 
 
@@ -380,7 +380,9 @@ def test_four_new_trials_are_balanced_across_both_neighborhoods_with_a_reused_fo
     shutil.copytree(other, pool / "walker1")
     write_json(pool / "seeds.json", {"schemaVersion": 1, "batches": ["four-bar", "walker1"]})
     archive = Archive(tmp_path / "search")
-    archive.initialize(native_episode.native_protocol(physics_protocol(), pool, discover=True, reuse_archives=[old]), 4, 42, False)
+    base = physics_protocol()
+    mock_constructor(tmp_path, monkeypatch, base)
+    archive.initialize(native_episode.native_protocol(base, pool, discover=True, reuse_archives=[old]), 4, 42, False)
     calls = []
     def screen(batch, output, library, **kwargs):
         summary, _ = native_episode._queue(batch)

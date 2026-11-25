@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import math
 import os
+import shutil
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -11,6 +13,62 @@ import numpy as np
 import pytest
 
 from legowalkers_sim.evolution import ROOT
+
+
+@pytest.mark.integration
+def test_stock_jansen_search_returns_socket_fitted_closed_motion_with_measured_stance(tmp_path):
+    local_dotnet = ROOT / ".tools/dotnet/dotnet"
+    dotnet = str(local_dotnet) if local_dotnet.is_file() else shutil.which("dotnet")
+    core = ROOT / "src/LegoWalkers.Core/bin/Debug/net10.0/LegoWalkers.Core.dll"
+    if not dotnet or not core.is_file():
+        pytest.skip("Build the Debug F# core and provide dotnet for the stock Jansen search.")
+    output = tmp_path / "search"
+    subprocess.run([dotnet, "fsi", str(ROOT / "scripts/jansen_search.fsx"), "--output", str(output)],
+                   cwd=ROOT, check=True, capture_output=True, text=True, timeout=120)
+    report = json.loads((output / "search.json").read_text())
+    motion = json.loads((output / "motion/motion.json").read_text())
+    frames = motion["frames"]
+    cycle = frames[:(len(frames)-1)//2]
+    feet = np.asarray([frame["feet"][0]["position"] for frame in cycle])
+    low = feet[:, 1].max()
+    stance = feet[feet[:, 1] >= low-report["thresholds"]["stanceBandLdu"]]
+    measured = {
+        "stride": float(np.ptp(feet[:, 0])), "lift": float(np.ptp(feet[:, 1])),
+        "stanceFraction": len(stance)/len(feet), "stanceTravel": float(np.ptp(stance[:, 0])),
+    }
+    for name, value in measured.items():
+        assert value == pytest.approx(report["chosen"]["metrics"][name], abs=1e-8)
+    assert measured["stride"] >= 40 and 10 <= measured["lift"] <= 60
+    assert measured["stanceFraction"] >= .25 and measured["stanceTravel"] >= 40
+    assert report["verifiedFinalists"] > 0
+    for frame in (frames[0], frames[len(cycle)], frames[-1]):
+        assert np.allclose(frame["feet"][0]["position"], frames[0]["feet"][0]["position"], atol=1e-5)
+    assert max(frame["maxResidualLdu"] for frame in frames) < 1.01e-7
+
+    def vector(value):
+        return np.asarray([value[axis] for axis in "xyz"])
+
+    # Independently match the exported rigid triangles to actual molded-part sockets.
+    sockets = {
+        "32526.dat": [np.array([0., 0., 20.*n]) for n in range(5)]
+                     + [np.array([20.*n, 0., 80.]) for n in (1, 2)],
+        "32271.dat": [np.array([0., 0., 20.*n]) for n in range(7)]
+                     + [np.array([16., 0., 132.]), np.array([32., 0., 144.])],
+    }
+    stock = {part["body"]: part for part in report["parts"]}
+    for body in motion["program"]["bodies"]:
+        if body["id"] not in ("upper-triangle", "foot-triangle"):
+            continue
+        part = stock[body["id"]]
+        rotation = np.column_stack([vector(part["rotation"][axis]) for axis in "xyz"])
+        position = vector(part["position"])
+        angle = body["initial"]["angle"]
+        c, s = math.cos(angle), math.sin(angle)
+        body_rotation = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+        for site in body["sites"]:
+            target = vector(body["initial"]["origin"]) + body_rotation @ vector(site["position"])
+            assert any(np.linalg.norm(position + rotation @ socket - target) < 1e-6
+                       for socket in sockets[part["part"]])
 
 
 @pytest.mark.integration

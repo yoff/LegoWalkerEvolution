@@ -108,8 +108,8 @@ module MotionExport =
         svg.Add """<rect width="1200" height="440" fill="#f5f8fc"/><g font-family="system-ui,sans-serif" fill="#203147">"""
         svg.Add """<text x="24" y="28" font-size="19" font-weight="bold">One motor input / generic rigid-body and hinge constraints</text>"""
         for panel in 0..3 do
-            let index = panel*(frames.Length-1)/4
-            let frame = frames[index]
+            let target = frames.Head.InputAngle + float panel*Math.PI/2.0
+            let frame = frames |> List.minBy (fun frame -> abs(frame.InputAngle-target))
             svg.Add $"""<text x="{24+panel*300}" y="59" font-size="16">Motor {panel*90} degrees</text>"""
             for foot in program.Feet do
                 let trace =
@@ -123,6 +123,9 @@ module MotionExport =
                 for other in values.Tail do
                     let dash = if body.Grounded then """ stroke-dasharray="4 4" """ else ""
                     svg.Add $"""<polyline points="{project panel values.Head} {project panel other}" fill="none" stroke="{color}" stroke-width="3" {dash}/>"""
+                if values.Length = 3 then
+                    let dash = if body.Grounded then """ stroke-dasharray="4 4" """ else ""
+                    svg.Add $"""<polyline points="{project panel values[1]} {project panel values[2]}" fill="none" stroke="{color}" stroke-width="3" {dash}/>"""
                 for point in values do
                     let coordinates = (project panel point).Split(',')
                     svg.Add $"""<circle cx="{coordinates[0]}" cy="{coordinates[1]}" r="3" fill="{color}"/>"""

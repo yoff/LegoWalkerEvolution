@@ -96,6 +96,10 @@ The example is a grammar fixture, not a qualified walker. CLI help exposes
 motion edits, stock realization, feet, construction feedback and diagnostic
 tools. Fresh construction/evaluation destinations must be empty.
 
+The [Jansen-style leg fixture](docs/jansen.md) also uses the existing motion
+grammar: `motion --example jansen`. It tests canonical linkage proportions,
+not yet a stock-part LEGO realization or an evolutionary founder.
+
 ## Current capabilities and limits
 
 - Native walkers have **two to six logical feet** driven from one mechanical

@@ -127,8 +127,61 @@ module MotionExamples =
                     {h with Id=Map.tryFind h.Id hingeNames |> Option.defaultValue h.Id; A=port h.A; B=port h.B})
                 Feet=program.Feet |> List.map (fun f -> {f with Port=port f.Port}) })
 
-    let names = ["four-bar"; "walker1"]
+    /// Canonical proportions, not Technic hole-grid dimensions: https://en.wikipedia.org/wiki/Jansen%27s_linkage
+    let jansen =
+        // Circle intersections select only the initial assembly branch; Motion solves every subsequent pose.
+        let meet (p: Vec3) (r: float) (q: Vec3) (s: float) =
+            let delta = Vec3.subtract q p
+            let distance = Vec3.length delta
+            let along = (r*r-s*s+distance*distance)/(2.0*distance)
+            let height = sqrt (r*r-along*along)
+            let axis = Vec3.scale (1.0/distance) delta
+            let center = Vec3.add p (Vec3.scale along axis)
+            let offset = Vec3.scale height (point -axis.Y axis.X)
+            [Vec3.add center offset; Vec3.subtract center offset]
+        let o,y,z = point 0 0,point -38 -7.8,point 15 0
+        let x = meet z 50.0 y 41.5 |> List.maxBy _.Y
+        let w = meet z 61.9 y 39.3 |> List.minBy _.Y
+        let v = meet y 40.1 x 55.8 |> List.minBy _.X
+        let u = meet v 39.4 w 36.7 |> List.minBy _.X
+        let t = meet w 49.0 u 65.7 |> List.minBy _.Y
+        let downward (p: Vec3) = point p.X -p.Y
+        let body id (origin: Vec3) sites =
+            let origin = downward origin
+            Motion.rigid id origin.X origin.Y 0
+                (sites |> List.map (fun (name,p) ->
+                    {Id=name; Position=Vec3.subtract (downward p) origin}))
+        {
+            Bodies = [
+                Motion.ground "ground" [Motion.site "drive" 0 0; Motion.site "rocker" -38 7.8]
+                body "crank" o ["root",o; "tip",z]
+                body "upper-drive" z ["crank",z; "rocker",x]
+                body "lower-drive" z ["crank",z; "rocker",w]
+                body "upper-triangle" y ["pivot",y; "drive",x; "knee",v]
+                body "rocker" y ["root",y; "tip",w]
+                body "shin" v ["upper",v; "lower",u]
+                body "foot-triangle" w ["pivot",w; "knee",u; "toe",t]
+            ]
+            Hinges = [
+                hinge "drive-bearing" "ground" "drive" "crank" "root"
+                hinge "crank-upper" "crank" "tip" "upper-drive" "crank"
+                hinge "crank-lower" "crank" "tip" "lower-drive" "crank"
+                hinge "upper-drive" "upper-drive" "rocker" "upper-triangle" "drive"
+                hinge "upper-bearing" "ground" "rocker" "upper-triangle" "pivot"
+                hinge "rocker-bearing" "ground" "rocker" "rocker" "root"
+                hinge "lower-drive" "lower-drive" "rocker" "foot-triangle" "pivot"
+                hinge "lower-rocker" "rocker" "tip" "foot-triangle" "pivot"
+                hinge "upper-knee" "upper-triangle" "knee" "shin" "upper"
+                hinge "lower-knee" "shin" "lower" "foot-triangle" "knee"
+            ]
+            Motor = {Body="crank"; Phase=0}
+            Transmissions = []
+            Feet = [Motion.foot "toe" "foot-triangle" "toe" 1]
+        }
+
+    let names = ["four-bar"; "walker1"; "jansen"]
     let named = function
         | "four-bar" -> fourBar Genome.defaults 0
         | "walker1" -> Ok walker1
-        | name -> Error $"Unknown motion example {name}; expected four-bar or walker1."
+        | "jansen" -> Ok jansen
+        | name -> Error $"Unknown motion example {name}; expected four-bar, walker1 or jansen."

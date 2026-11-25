@@ -13,7 +13,7 @@ let usage = """LegoWalkers: constrained Technic mechanism compiler
   sweep    --output DIR [--limit 1..32] [--seed INT]
   catalog
   propose --pairs 1..3 --variant wired|remote --towing yes|no --seed INT [--attempt INT] [--parent JSON]
-  motion --output DIR [--example four-bar|walker1 | --program JSON] [--steps 36..3600] [--turns 1..32]
+  motion --output DIR [--example four-bar|walker1|jansen | --program JSON] [--steps 36..3600] [--turns 1..32]
   motion-gallery --output DIR
   mutation-gallery --output DIR
   motif-gallery --output DIR

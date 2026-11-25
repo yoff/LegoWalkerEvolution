@@ -3,6 +3,8 @@ module LegoWalkers.MotionTests
 open System
 open System.IO
 open System.Text.Json
+open System.Globalization
+open System.Text.RegularExpressions
 open LegoWalkers
 open Xunit
 
@@ -88,6 +90,7 @@ let ``parallelogram and hinged foot reject invalid roots names singularities and
 [<Theory>]
 [<InlineData("four-bar", 3, 4)>]
 [<InlineData("walker1", 7, 10)>]
+[<InlineData("jansen", 7, 10)>]
 let ``known legs use the same primitives and close over a continuous full turn`` name moving hinges =
     let program = MotionExamples.named name |> Result.defaultWith failwith
     Assert.Equal(moving, program.Bodies |> List.filter (fun b -> not b.Grounded) |> List.length)
@@ -128,6 +131,81 @@ let ``generic four bar agrees with an independent analytic oracle at all phases`
         Assert.True(Vec3.distance b (position graph frame "crank" "tip") < 1e-7)
         Assert.True(Vec3.distance joint (position graph frame "coupler" "joint") < 1e-7)
         Assert.True(Vec3.distance foot (position graph frame "coupler" "foot") < 1e-7)
+
+[<Theory>]
+[<InlineData(1.0)>]
+[<InlineData(-1.0)>]
+let ``Jansen rigid triangles follow the canonical toe curve in both crank directions`` (direction: float) =
+    let program = MotionExamples.named "jansen" |> Result.defaultWith failwith
+    let graph = compiled program
+    let frames = Motion.sample graph [for n in 0..720 -> direction*float n*Math.PI/180.0]
+                 |> Result.defaultWith failwith |> List.toArray
+    // Independent circle-intersection reference in Y-down coordinates; no prescribed toe trajectory.
+    let expected = [
+        0,-43.160110524104724,91.75693292612321
+        90,-70.67056317652096,89.6428368009199
+        180,-33.72972953816961,73.51709740981946
+        270,-7.689066230641672,90.38935136740429
+    ]
+    for turn in 0..1 do
+        for phase,x,y in expected do
+            let index = turn*360 + (if direction>0.0 then phase else (360-phase)%360)
+            let actual = position graph frames[index] "foot-triangle" "toe"
+            Assert.True(Vec3.distance actual (Vec3.create x y 0) < 1e-5)
+    let spans = [
+        "crank","root","tip",15.0
+        "upper-drive","crank","rocker",50.0
+        "lower-drive","crank","rocker",61.9
+        "upper-triangle","pivot","drive",41.5
+        "upper-triangle","pivot","knee",40.1
+        "upper-triangle","drive","knee",55.8
+        "rocker","root","tip",39.3
+        "shin","upper","lower",39.4
+        "foot-triangle","pivot","knee",36.7
+        "foot-triangle","knee","toe",65.7
+        "foot-triangle","pivot","toe",49.0
+    ]
+    for frame in frames do
+        Assert.True(frame.MaxResidual <= 1e-7)
+        for body,a,b,length in spans do
+            Assert.Equal(length,Vec3.distance (position graph frame body a) (position graph frame body b),6)
+    let feet = frames[0..359] |> Array.map (fun frame -> position graph frame "foot-triangle" "toe")
+    let low = feet |> Array.maxBy _.Y |> _.Y
+    let stance = feet |> Array.filter (fun p -> p.Y > low-1.0)
+    let span (points: Vec3 array) = (points |> Array.maxBy _.X).X - (points |> Array.minBy _.X).X
+    Assert.InRange(span feet,67.8,68.1)
+    Assert.InRange(low-(feet |> Array.minBy _.Y).Y,22.3,22.6)
+    Assert.InRange(stance.Length,150,160)
+    Assert.InRange(span stance,56.5,58.0)
+
+[<Fact>]
+let ``multi turn Jansen cycle diagram shows the labeled first revolution quarters`` () =
+    let graph = compiled MotionExamples.jansen
+    let frames = Motion.sample graph [for n in 0..720 -> float n*Math.PI/180.0] |> Result.defaultWith failwith
+    let svg = MotionExport.cycleSvg MotionExamples.jansen graph frames
+    let crank = Regex.Matches(svg, """<polyline points="([^"]+)" fill="none" stroke="#b97800" """)
+    Assert.Equal(4,crank.Count)
+    let vectors = [for item in crank do
+                       let points = item.Groups[1].Value.Split(' ') |> Array.map (fun pair ->
+                           pair.Split(',') |> Array.map (fun number -> Double.Parse(number,CultureInfo.InvariantCulture)))
+                       yield points[1][0]-points[0][0],points[1][1]-points[0][1]]
+    for (x,y),(dx,dy) in List.zip vectors [1,0;0,1;-1,0;0,-1] do
+        Assert.True(x*float dx+y*float dy > 1.0)
+        Assert.True(abs(x*float dy-y*float dx) < 0.01)
+
+[<Fact>]
+let ``Jansen cycle diagram keeps both rigid triangles closed`` () =
+    let graph = compiled MotionExamples.jansen
+    let frames = Motion.sample graph [for n in 0..36 -> float n*Math.PI/18.0] |> Result.defaultWith failwith
+    let svg = MotionExport.cycleSvg MotionExamples.jansen graph frames
+    for color in ["#8454bb"; "#786457"] do
+        let edges = Regex.Matches(svg, $"""<polyline points="([^"]+)" fill="none" stroke="{color}" """)
+        Assert.Equal(12,edges.Count)
+        for panel in 0..3 do
+            let endpoints = [for n in 0..2 -> edges[panel*3+n].Groups[1].Value.Split(' ')]
+            Assert.Equal(endpoints[0][0],endpoints[1][0])
+            Assert.Equal(endpoints[0][1],endpoints[2][0])
+            Assert.Equal(endpoints[1][1],endpoints[2][1])
 
 [<Fact>]
 let ``walker1 dimensions and separate foot are attachment sites not special motion operators`` () =

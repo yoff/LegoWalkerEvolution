@@ -82,13 +82,19 @@ collision check or qualification for walking. Body colours are illustrative; blu
         }
         data.program.bodies.forEach((body,index) => {
             const sites = current.get(body.id);
-            const ordered = [...sites].sort((a,b) => a.x-b.x || a.y-b.y);
             context.strokeStyle = colours[index%colours.length];
             context.fillStyle = context.strokeStyle;
             context.lineWidth = body.grounded ? 3 : 7;
             context.setLineDash(body.grounded ? [5,5] : []);
             context.beginPath();
-            ordered.forEach((p,i) => {if(i===0)context.moveTo(x(p.x),y(p.y));else context.lineTo(x(p.x),y(p.y));});
+            for (const p of sites.slice(1)) {
+                context.moveTo(x(sites[0].x),y(sites[0].y));
+                context.lineTo(x(p.x),y(p.y));
+            }
+            if (sites.length === 3) {
+                context.moveTo(x(sites[1].x),y(sites[1].y));
+                context.lineTo(x(sites[2].x),y(sites[2].y));
+            }
             context.stroke(); context.setLineDash([]);
             for(const p of sites){context.beginPath();context.arc(x(p.x),y(p.y),4,0,2*Math.PI);context.fill();}
             const p=sites[0];context.font="12px system-ui";context.fillText(body.id,x(p.x)+8,y(p.y)-10);

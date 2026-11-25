@@ -70,6 +70,296 @@ def reap_until(pool):
     pytest.fail("Screening workers did not finish within 30 seconds.")
 
 
+def admission_fixture(task, directory, generator, library, payload_profile, stage):
+    stage("building", "Building attempt 1/1.")
+    if task.get("barrier") is not None:
+        task["barrier"].wait(timeout=30)
+    if task.get("release") is not None and not task["release"].wait(timeout=30):
+        raise AdapterError("Test admission release timed out.")
+    return {"status": "construction-rejected", "error": "Bounded construction rejected fixture.",
+            "entry": task["entry"]}
+
+
+class FixtureConstructor(Proposals):
+    def build_native(self, parent, output, **kwargs):
+        import subprocess
+
+        if load_manifest(parent / "manifest.json")["motion"]["genotypeId"] == getattr(self, "fail_design", None):
+            output.mkdir()
+            raise subprocess.TimeoutExpired(["build-walker"], 600)
+        return super().build_native(parent, output, **kwargs)
+
+
+def construction_fixture(task, directory, generator, library, payload_profile, stage):
+    from legowalkers_sim import motion_carry
+
+    motion_carry._centering = lambda *args: (None, None)
+    return motion_carry.prepare_construction(task, directory, generator, library, payload_profile, stage)
+
+
+class FixtureScreens(prescreen.ScreeningPool):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, construction_evaluator=construction_fixture, **kwargs)
+
+    def submit_construction(self, task, generator):
+        compiler = FixtureConstructor()
+        compiler.command = generator.command
+        compiler.fail_design = getattr(generator, "fail_design", None)
+        return super().submit_construction(task, compiler)
+
+
+def held_construction_fixture(task, directory, generator, library, payload_profile, stage):
+    stage("building", "Bounded constructor fixture is waiting.")
+    task["barrier"].wait(timeout=30)
+    if not task["release"].wait(timeout=30):
+        raise AdapterError("Construction fixture release timed out.")
+    return construction_fixture(task, directory, generator, library, payload_profile, stage)
+
+
+def test_dispatch_collects_admissions_and_refills_workers_while_real_construction_is_blocked(tmp_path, monkeypatch):
+    from legowalkers_sim import motion_carry
+    from test_native_discovery import setup_discovery
+
+    source, _, archive, _ = setup_discovery(tmp_path, monkeypatch, budget=1, screening_workers=2)
+    native_episode.stage_native(archive, source)
+    context = multiprocessing.get_context("spawn")
+    release, barrier = context.Event(), context.Barrier(2)
+    startup, tasks = admission_tasks(archive)
+    tasks[0]["barrier"] = barrier
+    observed = []
+    actual = prescreen.ScreeningPool
+
+    class Screens(actual):
+        def __init__(self, *args):
+            super().__init__(*args, evaluator=screened_fixture, admission_evaluator=admission_fixture,
+                             construction_evaluator=held_construction_fixture)
+
+        def submit_construction(self, task, generator):
+            compiler = FixtureConstructor()
+            compiler.command = generator.command
+            super().submit_construction({**task, "barrier": barrier, "release": release}, compiler)
+
+        def wait(self, simulations):
+            if archive.db.execute("SELECT count(*) FROM user_pool_entries").fetchone()[0] == 2 and not release.is_set():
+                job, = self.jobs
+                assert isinstance(job, prescreen.ConstructionJob) and job.process.is_alive()
+                assert archive.counts() == {}
+                assert archive.db.execute("SELECT count(*) FROM native_checks").fetchone()[0] == 0
+                assert archive.db.execute("SELECT stage FROM pipeline_events WHERE birth=1 ORDER BY id DESC").fetchone()[0] == "building"
+                observed.append(True)
+                release.set()
+            super().wait(simulations)
+
+    class Simulations:
+        jobs = []
+        full = False
+        exhausted = False
+        pending_gates = 0
+
+        @property
+        def generation_step(self):
+            return sum(archive.counts().values())
+
+        def reap(self):
+            return 0
+
+        def drain(self):
+            assert not self.jobs
+
+        def submit(self, birth, checked, settings):
+            assert observed, "Admission results were not collected during construction."
+            motion_carry.require_construction(archive, birth, checked)
+            measured = result(qualified=True)
+            measured["metrics"]["logicalFootCount"] = len(checked.manifest["feet"])
+            archive.finish(archive.reserve(birth), measured)
+
+    monkeypatch.setattr(prescreen, "ScreeningPool", Screens)
+    try:
+        discovery._dispatch_parallel(archive, Proposals(), tmp_path, options(), Simulations(), 1, 2,
+                                     admissions=tasks, startup=startup)
+        assert observed == [True] and archive.counts() == {"complete": 1}
+        assert archive.db.execute("SELECT count(*) FROM user_pool_entries").fetchone()[0] == 2
+        assert archive.db.execute("SELECT sum(allowance) FROM native_checks").fetchone()[0] == 1
+    finally:
+        release.set()
+        archive.db.close()
+
+
+def admission_tasks(archive, count=2, **values):
+    from legowalkers_sim import pipeline, user_pool
+
+    user_pool.queue(archive)
+    startup = pipeline.begin_startup(archive)
+    tasks = [{"entry": {"id": f"{index:032x}", "label": f"Contribution {index}"},
+              "parent": 1, **values} for index in range(count)]
+    pipeline.queue_startup(archive, startup,
+                           [(task["entry"]["id"], "admission", task["entry"]["label"]) for task in tasks])
+    return startup, tasks
+
+
+def test_admission_and_native_screen_share_capacity_and_named_live_stages(candidates, tmp_path):
+    from legowalkers_sim.pipeline import snapshot
+    from legowalkers_sim.previews import PreviewController
+    from legowalkers_sim.rendering import RenderController
+
+    archive, pending = candidates
+    PreviewController(archive.directory, tmp_path, None)
+    RenderController(archive.directory, tmp_path, None)
+    context = multiprocessing.get_context("spawn")
+    release, barrier = context.Event(), context.Barrier(2)
+    startup, tasks = admission_tasks(archive, barrier=barrier, release=release)
+    with prescreen.ScreeningPool(archive, 2, tmp_path, options(barrier=barrier),
+                                screened_fixture, admission_fixture) as pool:
+        try:
+            pool.submit_admission(tasks[0], startup, None)
+            pool.submit(pending[0], 0, 8)
+            assert pool.full and pool.births == {1} and pool.admitting
+            with pytest.raises(AdapterError, match="pool is full"):
+                pool.submit_admission(tasks[1], startup, None)
+            assert [birth for birth, _ in reap_until(pool)] == [1]
+            assert len(pool.jobs) == 1 and pool.jobs[0].process.is_alive()
+            prescreen.record(archive, 2, "building", "Ordinary candidate construction.")
+            live = snapshot(archive.db, archive.directory, running=True, tracked=True)
+            building = next(stage for stage in live["stages"] if stage["id"] == "building")
+            assert building["count"] == 2 and {item["birth"] for item in building["items"]} == {None, 2}
+            item, = [item for item in building["items"] if item["birth"] is None]
+            assert item["name"] == "Contribution 0" and item["history"] is None
+            assert item["pid"] == pool.jobs[0].process.pid
+            assert item["log"].startswith("admission-workers/")
+            assert archive.db.execute("SELECT count(*) FROM user_pool_entries").fetchone()[0] == 0
+            assert archive.counts() == {}
+        finally:
+            release.set()
+        assert reap_until(pool) == []
+    assert archive.db.execute("SELECT status FROM user_pool_entries").fetchone()[0] == "construction-rejected"
+    assert archive.db.execute("SELECT sum(allowance) FROM native_checks").fetchone()[0] == 1
+    assert archive.counts() == {}
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+@pytest.mark.parametrize("limit", ["budget", "cheap-gate"])
+def test_dispatch_does_not_wait_for_all_admissions_or_start_new_ones_after_budget(
+        tmp_path, monkeypatch, workers, limit):
+    archive, _ = make_candidates(tmp_path, count=1, budget=1)
+    context = multiprocessing.get_context("spawn")
+    release = context.Event()
+    barrier = context.Barrier(2) if workers == 2 else None
+    startup, tasks = admission_tasks(archive)
+    if workers == 2:
+        tasks[0].update(release=release, barrier=barrier)
+    actual_pool = prescreen.ScreeningPool
+    monkeypatch.setattr(prescreen, "ScreeningPool",
+                        lambda *args: actual_pool(*args, evaluator=screened_fixture,
+                                                  admission_evaluator=admission_fixture))
+
+    class Simulations:
+        jobs = []
+        full = False
+        exhausted = False
+        pending_gates = 0
+
+        @property
+        def generation_step(self):
+            return sum(archive.counts().values())
+
+        def reap(self):
+            return 0
+
+        def drain(self):
+            assert not self.jobs
+
+        def submit(self, birth, checked, settings):
+            if workers == 2:
+                assert archive.db.execute("SELECT status FROM pipeline_startup WHERE batch=? AND task=?",
+                                          (startup, tasks[0]["entry"]["id"])).fetchone()[0] == "running"
+            release.set()
+            if limit == "cheap-gate":
+                self.exhausted = True
+                return
+            measured = result(qualified=True)
+            measured["metrics"]["logicalFootCount"] = len(checked.manifest["feet"])
+            archive.finish(archive.reserve(birth), measured)
+
+    try:
+        assert discovery._dispatch_parallel(archive, Proposals(), tmp_path, options(barrier=barrier),
+                                            Simulations(), 1, workers, admissions=tasks, startup=startup) == 0
+        assert archive.counts() == ({"complete": 1} if limit == "budget" else {})
+        assert archive.db.execute("SELECT status FROM pipeline_startup WHERE batch=? AND task=?",
+                                  (startup, tasks[0]["entry"]["id"])).fetchone()[0] == "rejected"
+        assert archive.db.execute("SELECT status FROM pipeline_startup WHERE batch=? AND task=?",
+                                  (startup, tasks[1]["entry"]["id"])).fetchone()[0] == "queued"
+        assert archive.db.execute("SELECT count(*) FROM user_pool_entries").fetchone()[0] == 1
+        assert archive.db.execute("SELECT sum(allowance) FROM native_checks").fetchone()[0] == 1
+    finally:
+        release.set()
+        archive.db.close()
+
+
+def test_two_admissions_overlap_without_consuming_native_check_or_trial_allowance(candidates, tmp_path):
+    archive, _ = candidates
+    context = multiprocessing.get_context("spawn")
+    release = context.Event()
+    startup, tasks = admission_tasks(archive, barrier=context.Barrier(2), release=release)
+    with prescreen.ScreeningPool(archive, 2, tmp_path, options(), admission_evaluator=admission_fixture) as pool:
+        try:
+            for task in tasks:
+                pool.submit_admission(task, startup, None)
+            assert pool.full and not pool.births and pool.admitting
+            assert len({job.process.pid for job in pool.jobs}) == 2
+            assert all(job.process.is_alive() for job in pool.jobs)
+            assert pool.reap() == [] and archive.counts() == {}
+        finally:
+            release.set()
+        assert reap_until(pool) == []
+    assert archive.db.execute("SELECT count(*) FROM user_pool_entries").fetchone()[0] == 2
+    assert archive.db.execute("SELECT count(*) FROM native_checks").fetchone()[0] == 0
+    assert archive.counts() == {}
+
+
+def admission_with_compiler(task, directory, generator, library, payload_profile, stage):
+    import subprocess
+    import sys
+
+    partial = directory / "admission-partial"
+    partial.mkdir()
+    (partial / "attempt.json").write_text("{}")
+    stage("building", "Waiting for compiler fixture.")
+    subprocess.run([sys.executable, "-c",
+                    "import os,sys,time; from pathlib import Path; "
+                    "Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)",
+                    str(partial / "compiler.pid")], check=True, timeout=60)
+
+
+@pytest.mark.parametrize("kind", ["admission", "construction"])
+def test_cancel_reaps_compiler_and_retains_partial_attempt(candidates, tmp_path, kind):
+    archive, pending = candidates
+    startup, tasks = admission_tasks(archive, count=1)
+    with prescreen.ScreeningPool(archive, 1, tmp_path, options(),
+                                construction_evaluator=admission_with_compiler) as pool:
+        if kind == "admission":
+            pool.submit_admission(tasks[0], startup, None, evaluator=admission_with_compiler)
+        else:
+            pool.submit_construction({"pending": dict(pending[0])}, None)
+        pidfile = archive.directory / "admission-partial" / "compiler.pid"
+        deadline = time.monotonic() + 30
+        while not pidfile.exists():
+            assert time.monotonic() < deadline, "Compiler child did not start."
+            time.sleep(.01)
+        pid = int(pidfile.read_text())
+        pool.cancel("Explicit pause; partial construction retained.")
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+    assert (pidfile.parent / "attempt.json").exists()
+    if kind == "admission":
+        assert archive.db.execute("SELECT status FROM user_pool_entries").fetchone()[0] == "interrupted"
+        assert archive.db.execute("SELECT status FROM pipeline_startup WHERE batch=? AND task=?",
+                                  (startup, tasks[0]["entry"]["id"])).fetchone()[0] == "interrupted"
+    else:
+        assert archive.db.execute("SELECT status FROM births WHERE id=1").fetchone()[0] == "construction-interrupted"
+        assert archive.db.execute("SELECT status FROM screening_workers WHERE birth=1").fetchone()[0] == "interrupted"
+    assert archive.counts() == {}
+
+
 def test_spawned_screening_overlaps_and_fast_sibling_is_ready_independently(candidates, tmp_path):
     from legowalkers_sim.pipeline import snapshot
     from legowalkers_sim.previews import PreviewController
@@ -177,7 +467,7 @@ def test_parallel_screening_and_prefix_handoffs_respect_full_budget_and_normal_c
     native_episode.stage_native(archive, source)
     archive.finish(archive.reserve(1), result(qualified=True))
     settings = options(short_gate=2, reject_prefix=reject)
-    actual_pool = prescreen.ScreeningPool
+    actual_pool = FixtureScreens
     monkeypatch.setattr(prescreen, "ScreeningPool",
                         lambda *args: actual_pool(*args, evaluator=screened_fixture))
     try:
@@ -359,6 +649,8 @@ def test_ready_buffer_is_bounded_by_four_and_remaining_authorization(tmp_path, m
     class Screens:
         def __init__(self, *args):
             self.jobs = []
+            self.constructed = []
+            self.admitting = False
             self.births = set()
             self.failures = 0
             self.full = False

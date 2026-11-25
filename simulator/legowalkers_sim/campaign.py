@@ -2,11 +2,13 @@
 
 import contextlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
 import secrets
 import sqlite3
+import subprocess
 import threading
 from html.parser import HTMLParser
 from urllib.parse import quote, urljoin
@@ -62,7 +64,7 @@ def idle(directory):
 def runtime_identity(protocol):
     return canonical({key: value for key, value in protocol.items()
                       if key not in ("id", "candidateBatch", "nativeCandidates", "reuseArchives",
-                                     "requalificationCandidates")})
+                                     "requalificationCandidates", "deferredConstruction")})
 
 
 def reusable(source, target, *, designs=None, target_source=None):
@@ -200,6 +202,8 @@ class CampaignController:
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "campaign.json"
         self.mutex = threading.RLock()
+        self.preparation_lock = threading.Lock()
+        self.preparation_thread = None
         self.token = secrets.token_urlsafe(32)
         self.load, self.build, self.describe = load, build, describe
         self.generator = generator
@@ -245,6 +249,8 @@ class CampaignController:
                 self._mark(version["archive"], version["id"])
         self.active = self.load(self.directory)
         self.stamp = None
+        if self.state.get("migration", {}).get("status") == "running":
+            self._finish_migration("failed", "Preparation was interrupted; the active version and partial outputs were retained.")
 
     def _record(self, identifier, path, inherited=0):
         with database(path) as db:
@@ -311,7 +317,8 @@ class CampaignController:
 
     def status(self):
         with self.mutex:
-            state = self.active.status()
+            migrating = self.state.get("migration", {}).get("status") == "running"
+            state = self.active.status(automatic_previews=not migrating)
             qualified = []
             for version in self.state["versions"]:
                 with database(version["archive"]) as db:
@@ -321,48 +328,102 @@ class CampaignController:
             state["pipeline"]["qualified"] = recent_qualified(qualified)
             history = self.history()
             remaining = history["budget"]-history["used"]
+            update_available = self.stamp != self._stamp()
+            migration = dict(self.state.get("migration", {
+                "status": "required", "stage": "Prepare the current implementation before resuming.",
+                "error": self.state.get("lastUpdateError")}))
+            if migration["status"] == "ready" and update_available:
+                migration.update(status="required", stage="Implementation changed; explicit preparation is required.")
             state.update(campaign=history["id"], version=self.state["active"],
                          versionUsed=state["used"], versionBudget=state["budget"],
                          used=history["used"], budget=history["budget"], remaining=remaining,
                          revision=f'{self.state["active"]}:{state["revision"]}',
                          csrfToken=self.token, historyUrl="/history.html",
-                         updateAvailable=self.stamp != self._stamp(),
+                         updateAvailable=update_available,
+                         migration=migration,
+                         canStart=state["canStart"] and not migrating and not update_available,
                          updateError=self.state.get("lastUpdateError"))
             return state
 
+    def _migration_phase(self, stage, target=None):
+        with self.mutex:
+            migration = self.state.get("migration")
+            if migration is None or migration["status"] != "running":
+                return
+            migration["stage"] = stage
+            if target is not None:
+                migration["targetVersion"] = target
+            self._save()
+            with (self.root / "migration.log").open("a") as log:
+                log.write(f"{now()} {stage}\n")
+
+    def _finish_migration(self, status, error=None):
+        with self.mutex:
+            migration = self.state["migration"]
+            migration.update(status=status, completed=now(), error=error,
+                             stage="Ready to resume; no episode started." if status == "ready" else "Preparation failed; previous version retained.")
+            if error is not None:
+                self.state["lastUpdateError"] = error
+            self._save()
+            with (self.root / "migration.log").open("a") as log:
+                log.write(f"{now()} {migration['stage']}{': '+error if error else ''}\n")
+
+    def _run_migration(self):
+        try:
+            self.ensure_latest()
+        except (AdapterError, OSError, sqlite3.Error, ValueError, subprocess.SubprocessError) as error:
+            logging.exception("Campaign preparation failed")
+            self._finish_migration("failed", str(error))
+        else:
+            self._finish_migration("ready")
+        finally:
+            if self.state["migration"]["status"] == "running":
+                logging.error("Unexpected campaign preparation failure", exc_info=True)
+                self._finish_migration("failed", "Unexpected preparation failure; see the dashboard process log.")
+
     def ensure_latest(self, *, additional_parents=(), authorization=0):
-        with self.mutex, locked(self.root):
-            source = self.directory
+        with self.preparation_lock, locked(self.root):
+            with self.mutex:
+                source = self.directory
+                active = self.active
+                paths = [Path(v["archive"]) for v in self.state["versions"]]
+            self._migration_phase("Checking the requested implementation and input snapshots.")
             try:
+                requested_stamp = self._stamp(source, active)
                 requested = self.describe(source / "native-input")
+                if requested_stamp != self._stamp(source, active):
+                    raise AdapterError("Implementation changed while checking preparation; retry the explicit preparation.")
             except (AdapterError, OSError, ValueError) as error:
-                self.state["lastUpdateError"] = str(error)
-                self._save()
+                with self.mutex:
+                    self.state["lastUpdateError"] = str(error)
+                    self._save()
                 raise
             if not additional_parents and runtime_identity(requested) == runtime_identity(definition(source)):
-                self.stamp = self._stamp()
-                if self.state.get("lastUpdateError"):
-                    self.state["lastUpdateError"] = None
-                    self._save()
+                with self.mutex:
+                    self.stamp = self._stamp()
+                    if self.state.get("lastUpdateError"):
+                        self.state["lastUpdateError"] = None
+                        self._save()
                 return {"updated": False, "version": self.state["active"], "url": "/"}
-            state = self.active.status(automatic_previews=False)
+            state = active.status(automatic_previews=False)
             if state["running"]:
                 raise AdapterError("Stop the episode and rendering workers before updating this experiment.")
-            if state["rendering"]["running"] and not self.active.renderer.stop_if_idle():
+            if state["rendering"]["running"] and not active.renderer.stop_if_idle():
                 raise AdapterError("Stop the episode and rendering workers before updating this experiment.")
-            paths = [Path(v["archive"]) for v in self.state["versions"]]
             number = len(self.state["versions"])+1
             while (self.root / "versions" / f"v{number:04d}").exists():
                 number += 1
             identifier = f"v{number:04d}"
             target = self.root / "versions" / identifier
             try:
+                self._migration_phase("Collecting retained motion plans and preparing version inputs.", identifier)
                 with contextlib.ExitStack() as stack:
                     for path in paths:
                         stack.enter_context(locked(path))
                         idle(path)
                     options = {"additional_parents": additional_parents} if additional_parents else {}
-                    _, seeds = prepare(source, target=target, sources=paths, generator=self.generator, **options)
+                    _, seeds = prepare(source, target=target, sources=paths,
+                                       generator=self.generator if additional_parents else None, **options)
                     self._mark(target, identifier)
                     protocol = self.describe(seeds)
                     if runtime_identity(protocol) != runtime_identity(requested):
@@ -374,7 +435,9 @@ class CampaignController:
                     allowance = history["budget"]-history["used"]
                     if allowance < 0:
                         raise AdapterError("Experiment authorization accounting is inconsistent.")
+                    self._migration_phase("Freezing the implementation and queuing immutable motion inputs; construction runs after Resume.")
                     controller = self.build(target, seeds, protocol, allowance + authorization)
+                    self._migration_phase("Verifying the frozen version and unchanged trial accounting.")
                     if runtime_identity(definition(target)) != runtime_identity(protocol):
                         raise AdapterError("Implementation changed while preparing the frozen runtime; retry the update.")
                     ready = controller.status()
@@ -387,26 +450,31 @@ class CampaignController:
                         version["requalificationSources"] = [row["design"] for row in additional_parents]
                         version["newAuthorization"] = authorization
                     stamp = self._stamp(target, controller)
-                    previous = self.state
-                    self.state = {**previous, "active": identifier, "versions": [*previous["versions"], version],
-                                  "lastUpdateError": None}
-                    try:
-                        self._save()
-                    except OSError:
-                        self.state = previous
-                        raise
-                    self.active = controller
-                    self.stamp = stamp
+                    with self.mutex:
+                        previous = self.state
+                        self.state = {**previous, "active": identifier, "versions": [*previous["versions"], version],
+                                      "lastUpdateError": None}
+                        try:
+                            self._save()
+                        except OSError:
+                            self.state = previous
+                            raise
+                        self.active = controller
+                        self.stamp = stamp
                 return {"updated": True, "version": identifier, "url": "/",
                         "remaining": allowance + authorization}
             except (AdapterError, OSError, sqlite3.Error, ValueError) as error:
-                self.state["lastUpdateError"] = str(error)
-                self._save()
+                with self.mutex:
+                    self.state["lastUpdateError"] = str(error)
+                    self._save()
                 raise
 
     def start(self):
         with self.mutex:
-            self.ensure_latest()
+            if self.state.get("migration", {}).get("status") == "running":
+                raise AdapterError("Preparation is running; wait for Ready before resuming.")
+            if self.stamp != self._stamp():
+                raise AdapterError("Explicitly prepare the current implementation before resuming; Resume never rebuilds or migrates.")
             return {**self.active.start(), "version": self.state["active"]}
 
     def requalify(self, trials):
@@ -414,6 +482,8 @@ class CampaignController:
         if type(trials) is not int or not 1 <= trials <= 32:
             raise AdapterError("Requalification requires an explicit allowance of one to 32 trials.")
         with self.mutex:
+            if self.state.get("migration", {}).get("status") == "running":
+                raise AdapterError("Wait for preparation to finish before requalification.")
             candidates = {}
             for version in self.state["versions"]:
                 source = Path(version["archive"])
@@ -441,10 +511,31 @@ class CampaignController:
             return {**update, **job, "authorizedAdditionalTrials": trials, "scheduledWalkers": len(candidates)}
 
     def upgrade(self):
-        return self.ensure_latest()
+        with self.mutex:
+            if self.state.get("migration", {}).get("status") == "running":
+                raise AdapterError("Preparation is already running.")
+            if self.active.status(automatic_previews=False)["running"]:
+                raise AdapterError("Wait for the episode to finish before preparing a migration.")
+            self.state["migration"] = {
+                "status": "running", "stage": "Preparation queued.", "started": now(),
+                "completed": None, "error": None, "sourceVersion": self.state["active"],
+                "targetVersion": None, "log": "/migration.log"}
+            self.state["lastUpdateError"] = None
+            atomic_text(self.root / "migration.log", f"{now()} Explicit preparation requested; no trials authorized.\n")
+            self._save()
+            self.preparation_thread = threading.Thread(target=self._run_migration, name="campaign-preparation", daemon=True)
+            try:
+                self.preparation_thread.start()
+            except RuntimeError as error:
+                self._finish_migration("failed", str(error))
+                raise AdapterError(f"Could not start preparation: {error}") from error
+            return {"preparing": True, "version": self.state["active"], "url": "/",
+                    "migration": dict(self.state["migration"])}
 
     def render_start(self):
         with self.mutex:
+            if self.state.get("migration", {}).get("status") == "running":
+                raise AdapterError("Wait for preparation to finish before starting rendering.")
             return self.renderer.start()
 
     def render_stop(self):

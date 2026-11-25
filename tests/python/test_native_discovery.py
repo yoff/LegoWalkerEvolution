@@ -109,8 +109,8 @@ def test_backward_gait_generates_one_normal_control_only_repair_then_is_measured
     source, _, archive, _ = setup_discovery(tmp_path, monkeypatch, budget=2, screening_workers=screening_workers)
     if screening_workers == 2:
         from legowalkers_sim import prescreen
-        from test_prescreen import screened_fixture
-        actual_pool = prescreen.ScreeningPool
+        from test_prescreen import FixtureScreens, screened_fixture
+        actual_pool = FixtureScreens
         monkeypatch.setattr(prescreen, "ScreeningPool",
                             lambda *args: actual_pool(*args, evaluator=screened_fixture))
     calls = []
@@ -168,8 +168,22 @@ def mock_constructor(tmp_path, monkeypatch, base):
     monkeypatch.setattr(motion_carry, "_centering", lambda *args: (None, None))
 
 
-def setup_discovery(tmp_path, monkeypatch, budget=3, rejected_checks=False, screening_workers=1, replacement=False):
+def setup_discovery(tmp_path, monkeypatch, budget=3, rejected_checks=False, screening_workers=1, replacement=False,
+                    second_founder=False):
     source, data = native_fixture(tmp_path)
+    if second_founder:
+        other = source / "candidate-1"
+        shutil.copytree(source / "candidate-0", other)
+        manifest = json.loads((other / "manifest.json").read_text())
+        manifest["genome"]["speed"] = -manifest["genome"]["speed"]
+        manifest["expected"]["drives"][0]["speed"] = manifest["genome"]["speed"]
+        manifest["motion"]["genotypeId"] = identity(manifest["genome"])
+        (other / "manifest.json").write_text(json.dumps(manifest))
+        (other / "realization.json").write_text(json.dumps(manifest["genome"]))
+        summary = json.loads((source / "candidates.json").read_text())
+        summary["generated"].append({"directory": other.name, "genotypeId": manifest["motion"]["genotypeId"],
+                                     "assemblyId": manifest["motion"]["assemblyId"]})
+        (source / "candidates.json").write_text(json.dumps(summary))
     archive = Archive(tmp_path / "archive")
     base = protocol()
     mock_constructor(tmp_path, monkeypatch, base)
@@ -260,7 +274,7 @@ def test_native_parent_offspring_selection_and_immutable_motion_lineage(tmp_path
         assert len(set(calls)) == 3 and calls[0] == data["motion"]["genotypeId"]
         assert [row[0] for row in archive.db.execute(
             "SELECT stage FROM pipeline_events WHERE birth=1 ORDER BY id")] == [
-                "planning", "building", "screening", "screened", "preflight", "ready"]
+                "planning", "planning", "building", "building", "screening", "screened", "preflight", "ready"]
         assert archive.db.execute("SELECT count(*) FROM native_proposals WHERE status='generated'").fetchone()[0] == 2
         page = (archive.directory / "index.html").read_text()
         assert "Native motion proposals" in page and "Enabled mutations:" in page
@@ -269,6 +283,44 @@ def test_native_parent_offspring_selection_and_immutable_motion_lineage(tmp_path
         assert "Recorded motion edits" in lineage and "candidate/program.json" in lineage
         discovery.search_discovery(archive, generator, source, tmp_path, EvaluationOptions())
         assert len(calls) == 3
+    finally:
+        archive.db.close()
+
+
+@pytest.mark.parametrize("screening_workers", [1, 2])
+def test_timed_out_founder_does_not_abort_episode_or_spend_trial_before_other_motion_runs(tmp_path, monkeypatch, screening_workers):
+    import subprocess
+
+    source, _, archive, evaluations = setup_discovery(tmp_path, monkeypatch, budget=1,
+                                                     screening_workers=screening_workers, second_founder=True)
+    if screening_workers == 2:
+        from legowalkers_sim import prescreen
+        from test_prescreen import FixtureScreens, screened_fixture
+        actual = FixtureScreens
+        monkeypatch.setattr(prescreen, "ScreeningPool", lambda *args: actual(*args, evaluator=screened_fixture))
+
+    class Compiler(Proposals):
+        def __init__(self):
+            super().__init__()
+            self.builds = 0
+            self.fail_design = load_manifest(source / "candidate-0/manifest.json")["motion"]["genotypeId"]
+
+        def build_native(self, parent, output, **kwargs):
+            self.builds += 1
+            if self.builds == 1:
+                assert archive.counts() == {}
+                output.mkdir()
+                raise subprocess.TimeoutExpired(["build-walker"], 600)
+            return super().build_native(parent, output, **kwargs)
+
+    try:
+        generator = Compiler()
+        result = discovery.search_discovery(archive, generator, source, tmp_path, EvaluationOptions())
+        assert result["evaluations"] == {"complete": 1} and len(evaluations) == 1
+        assert archive.db.execute("SELECT status FROM births WHERE id=1").fetchone()[0] == "construction-rejected"
+        if screening_workers == 1:
+            assert generator.builds == 2
+        assert archive.db.execute("SELECT count(*) FROM motion_realizations").fetchone()[0] == 2
     finally:
         archive.db.close()
 

@@ -2,6 +2,7 @@
 
 import contextlib
 import json
+import os
 from pathlib import Path
 import random
 import re
@@ -10,11 +11,11 @@ import sqlite3
 from .bridge import AdapterError, load_manifest
 from .evolution import canonical, evidence_invalidation, now
 
-POLICY = {"version": "user-population-v4", "capacity": 12, "parentProbability": .2,
+POLICY = {"version": "user-population-v5", "capacity": 12, "parentProbability": .2,
           "selection": "Uniform active admitted contributions, before measured-parent tournaments; "
                        "diagnostic repairs retain priority. Contributions never acquire invented fitness.",
           "admission": "Snapshot motion/control intent; current bounded paired-foot, ground-reserved construction and exact validation per immutable version.",
-          "evaluation": "Admitted unmeasured designs queue before offspring; normal gates and existing authorized slots apply. "
+          "evaluation": "Contribution admission shares screening capacity with ordinary candidates; ready unmeasured contributions queue before offspring. Normal gates and existing authorized slots apply. "
                         "Existing measurements and attempted designs are not repeated.",
           "budget": "No dynamic authorization from edits, contributions or admissions."}
 
@@ -53,10 +54,8 @@ def founder_origins(archive):
     return {_origin(archive.directory, row["id"]): row["id"] for row in roots}
 
 
-def sync(archive, library, payload_profile=None, *, startup_batch=None, generator=None):
-    from .native_episode import _queue, _freeze_batch, _copy_candidate, refresh_seed_exports
-    from .screening import screen_batch
-    from .screening_reports import rejection_detail
+def queue(archive, *, startup_batch=None):
+    from .native_episode import _freeze_batch
     from .upgrades import _origin
 
     archive.db.executescript("""
@@ -98,23 +97,41 @@ def sync(archive, library, payload_profile=None, *, startup_batch=None, generato
         archive.db.execute("INSERT INTO user_pool_snapshots(created,entries) VALUES(?,?)",
                            (now(), canonical(entries)))
     origins = founder_origins(archive) if entries else {}
-    from .pipeline import queue_startup, startup_step
+    from .pipeline import ensure_schema, queue_startup, startup_step
+    ensure_schema(archive.db)
     if startup_batch is not None:
         queue_startup(archive, startup_batch, [
             (entry["id"], "admission", entry["label"]) for entry in entries])
+    tasks = []
     for entry in entries:
-        tracking = (startup_step(archive, startup_batch, entry["id"]) if startup_batch is not None
-                    else contextlib.nullcontext())
-        with tracking as progress:
-            if not all(isinstance(entry[key], str) and re.fullmatch("[a-f0-9]{32}", entry[key])
-                       for key in ("id", "node")):
-                raise AdapterError("User contribution contains an invalid immutable identifier.")
-            source = workbench / "designs" / entry["node"]
-            original_files = json.loads(entry["files"])
-            saved = archive.directory / "user-contribution-inputs" / entry["id"]
-            _freeze_batch(source, saved, original_files)
-            existing = archive.db.execute("SELECT * FROM user_pool_entries WHERE contribution=?", (entry["id"],)).fetchone()
-            if existing is not None:
+        if not all(isinstance(entry[key], str) and re.fullmatch("[a-f0-9]{32}", entry[key])
+                   for key in ("id", "node")):
+            raise AdapterError("User contribution contains an invalid immutable identifier.")
+        source = workbench / "designs" / entry["node"]
+        saved = archive.directory / "user-contribution-inputs" / entry["id"]
+        _freeze_batch(source, saved, json.loads(entry["files"]))
+        existing = archive.db.execute("SELECT * FROM user_pool_entries WHERE contribution=?", (entry["id"],)).fetchone()
+        if existing is None:
+            previous = archive.db.execute("""
+                SELECT batch,task,pid FROM pipeline_startup
+                WHERE kind='admission' AND task=? AND status='running' ORDER BY id DESC LIMIT 1
+            """, (entry["id"],)).fetchone()
+            if previous is not None:
+                try:
+                    os.kill(previous["pid"], 0)
+                except ProcessLookupError:
+                    from .pipeline import update_startup
+                    error = "Previous admission worker exited; partial work is retained and not automatically repeated."
+                    interrupt_admission(archive, {"entry": entry}, error)
+                    update_startup(archive, previous["batch"], previous["task"], "interrupted", error)
+                    existing = archive.db.execute(
+                        "SELECT * FROM user_pool_entries WHERE contribution=?", (entry["id"],)).fetchone()
+                else:
+                    raise AdapterError(f"Admission worker {previous['pid']} is still running; wait before resuming.")
+        if existing is not None:
+            tracking = (startup_step(archive, startup_batch, entry["id"]) if startup_batch is not None
+                        else contextlib.nullcontext())
+            with tracking as progress:
                 if json.loads(existing["provenance"])["files"] != entry["files"]:
                     raise AdapterError("Previously admitted user contribution inputs changed.")
                 if existing["status"] == "eligible":
@@ -128,77 +145,129 @@ def sync(archive, library, payload_profile=None, *, startup_batch=None, generato
                     progress.update(status="complete" if existing["status"] == "eligible" else "rejected",
                                     birth=existing["birth"], detail=existing["error"] or
                                     "Admission already recorded; no repeated reconstruction check.")
-                continue
-            source = refresh_seed_exports(saved, archive.directory / "input-exports", generator)
-            summary, files = _queue(source)
-            migrated = source != saved.resolve()
-            unchanged = {name: digest for name, digest in files.items()
-                         if not migrated or (name != "export-migration.json" and not name.endswith("/manifest.json"))}
-            expected = {name: digest for name, digest in original_files.items()
-                        if not migrated or (name != "export-migration.json" and not name.endswith("/manifest.json"))}
-            if unchanged != expected:
-                raise AdapterError("User contribution changed after static validation.")
-            if generator is not None:
-                from .leg_family_migration import convert
-                source = convert(source, archive.directory / "leg-family-inputs", generator)
-                summary, files = _queue(source)
-                entry["legFamilyConversion"] = json.loads((source / "leg-family-migration.json").read_text())
-            from .motion_carry import POLICY as motion_policy, rebuild
-            if archive.protocol().get("nativeDiscovery", {}).get("motionCarryForward") == motion_policy:
-                if generator is None:
-                    raise AdapterError("Motion-first user admission requires the frozen current constructor.")
-                rebuilt = rebuild(source / summary["generated"][0]["directory"],
-                                  archive.directory / "user-motion-builds" / entry["id"],
-                                  generator, library, payload_profile)
-                entry["motionReconstruction"] = rebuilt
-                if rebuilt["status"] != "generated":
-                    with archive.db:
-                        archive.db.execute("INSERT INTO user_pool_entries VALUES(?,NULL,?,?,?)",
-                                           (entry["id"], "construction-rejected", rebuilt["error"], canonical(entry)))
-                    if progress is not None:
-                        progress.update(status="rejected", detail=rebuilt["error"])
-                    continue
-                source = Path(rebuilt["batch"])
-                summary, files = _queue(source)
-            entry["admissionFiles"] = files
-            origin = _origin(entry["source_archive"], entry["source_birth"])
-            parent = origins.get(origin)
-            frozen = archive.directory / "user-contributions" / entry["id"]
-            _freeze_batch(source, frozen, files)
-            screening = screen_batch(frozen, archive.directory / "user-admissions" / entry["id"],
-                                     library, max_checks=1, payload_profile=payload_profile)
-            report, = screening["results"]
-            ready = report["status"] == "ready-for-dynamics" or (
-                report["status"] == "duplicate" and report.get("previousStatus") == "ready-for-dynamics")
-            error = None if ready else rejection_detail(report)
-            if parent is None:
-                ready, error = False, "Source founder family is not retained; fork a current candidate to rebase."
-            birth = None
-            if ready:
-                candidate = summary["generated"][0]
-                prior = archive.db.execute(
-                    "SELECT id FROM births WHERE design=? AND status!='duplicate' ORDER BY id LIMIT 1",
-                    (candidate["genotypeId"],)).fetchone()
-                if prior:
-                    birth = prior[0]
-                    if "motionReconstruction" in entry:
-                        from .motion_carry import bind_candidate
-                        bind_candidate(archive, birth, {"batch": str(frozen.relative_to(archive.directory)),
-                                                      "directory": candidate["directory"], "files": files})
-                else:
-                    manifest, _ = _copy_candidate(archive, frozen, candidate, files)
-                    birth, _ = archive.record_native_birth(
-                        manifest, status="generated", parent=parent, operation="user-contribution",
-                        changed=[{"path": "user-contribution", "before": [], "after": [entry["id"]]}],
-                        native={"assembly": candidate["assemblyId"],
-                                "batch": str(frozen.relative_to(archive.directory)), "directory": candidate["directory"],
-                                "files": files})
-            with archive.db:
-                archive.db.execute("INSERT INTO user_pool_entries VALUES(?,?,?,?,?)",
-                                   (entry["id"], birth, "eligible" if ready else "rejected", error, canonical(entry)))
+            continue
+        from .motion_carry import POLICY as motion_policy
+        tasks.append({"entry": entry, "source": str(saved),
+                      "parent": origins.get(_origin(entry["source_archive"], entry["source_birth"])),
+                      "motionFirst": archive.protocol().get("nativeDiscovery", {}).get("motionCarryForward") == motion_policy})
+    return tasks
+
+
+def prepare_admission(task, directory, generator, library, payload_profile, observe):
+    from .native_episode import _queue, _freeze_batch, refresh_seed_exports
+    from .screening import screen_batch
+    from .screening_reports import rejection_detail
+
+    entry = json.loads(canonical(task["entry"]))
+    saved, directory = Path(task["source"]), Path(directory)
+    original_files = json.loads(entry["files"])
+    _freeze_batch(saved, saved, original_files)
+    observe("planning", "Importing immutable contribution inputs with the frozen generator.")
+    source = refresh_seed_exports(saved, directory / "input-exports" / entry["id"], generator)
+    summary, files = _queue(source)
+    migrated = source != saved.resolve()
+    unchanged = {name: digest for name, digest in files.items()
+                 if not migrated or (name != "export-migration.json" and not name.endswith("/manifest.json"))}
+    expected = {name: digest for name, digest in original_files.items()
+                if not migrated or (name != "export-migration.json" and not name.endswith("/manifest.json"))}
+    if unchanged != expected:
+        raise AdapterError("User contribution changed after static validation.")
+    if generator is not None:
+        from .leg_family_migration import convert
+        source = convert(source, directory / "leg-family-inputs" / entry["id"], generator)
+        summary, files = _queue(source)
+        entry["legFamilyConversion"] = json.loads((source / "leg-family-migration.json").read_text())
+    if task["motionFirst"]:
+        from .motion_carry import rebuild
+        if generator is None:
+            raise AdapterError("Motion-first user admission requires the frozen current constructor.")
+        rebuilt = rebuild(source / summary["generated"][0]["directory"],
+                          directory / "user-motion-builds" / entry["id"],
+                          generator, library, payload_profile, observer=observe)
+        entry["motionReconstruction"] = rebuilt
+        if rebuilt["status"] != "generated":
+            return {"status": "construction-rejected", "error": rebuilt["error"], "entry": entry}
+        source = Path(rebuilt["batch"])
+        summary, files = _queue(source)
+    entry["admissionFiles"] = files
+    frozen = directory / "user-contributions" / entry["id"]
+    _freeze_batch(source, frozen, files)
+    observe("screening", "Exact load-only admission; no walking trial reserved.")
+    screening = screen_batch(frozen, directory / "user-admissions" / entry["id"],
+                             library, max_checks=1, payload_profile=payload_profile)
+    report, = screening["results"]
+    ready = report["status"] == "ready-for-dynamics" or (
+        report["status"] == "duplicate" and report.get("previousStatus") == "ready-for-dynamics")
+    error = None if ready else rejection_detail(report)
+    if task["parent"] is None:
+        ready, error = False, "Source founder family is not retained; fork a current candidate to rebase."
+    return {"status": "eligible" if ready else "rejected", "error": error, "entry": entry}
+
+
+def finish_admission(archive, task, result):
+    from .native_episode import _queue, _copy_candidate
+
+    if (not isinstance(result, dict) or result.get("status") not in ("eligible", "rejected", "construction-rejected")
+            or not isinstance(result.get("entry"), dict)):
+        raise AdapterError("Admission worker returned an invalid outcome.")
+    entry, status, error = result["entry"], result["status"], result.get("error")
+    if any(entry.get(key) != value for key, value in task["entry"].items()):
+        raise AdapterError("Admission worker changed immutable contribution provenance.")
+    if (status == "eligible" and error is not None) or (status != "eligible" and (not isinstance(error, str) or not error)):
+        raise AdapterError("Admission outcome omitted or contradicted its diagnostic.")
+    birth = None
+    if status == "eligible":
+        frozen = archive.directory / "user-contributions" / entry["id"]
+        summary, files = _queue(frozen)
+        if files != entry.get("admissionFiles"):
+            raise AdapterError("Admission inputs changed after independent checking.")
+        candidate, = summary["generated"]
+        prior = archive.db.execute(
+            "SELECT id FROM births WHERE design=? AND status!='duplicate' ORDER BY id LIMIT 1",
+            (candidate["genotypeId"],)).fetchone()
+        if prior:
+            birth = prior[0]
+            if "motionReconstruction" in entry:
+                from .motion_carry import bind_candidate
+                bind_candidate(archive, birth, {"batch": str(frozen.relative_to(archive.directory)),
+                                              "directory": candidate["directory"], "files": files})
+        else:
+            manifest, _ = _copy_candidate(archive, frozen, candidate, files)
+            birth, _ = archive.record_native_birth(
+                manifest, status="generated", parent=task["parent"], operation="user-contribution",
+                changed=[{"path": "user-contribution", "before": [], "after": [entry["id"]]}],
+                native={"assembly": candidate["assemblyId"],
+                        "batch": str(frozen.relative_to(archive.directory)), "directory": candidate["directory"],
+                        "files": files})
+    with archive.db:
+        archive.db.execute("INSERT INTO user_pool_entries VALUES(?,?,?,?,?)",
+                           (entry["id"], birth, status, error, canonical(entry)))
+    return birth
+
+
+def interrupt_admission(archive, task, error):
+    with archive.db:
+        archive.db.execute("""INSERT INTO user_pool_entries VALUES(?,NULL,'interrupted',?,?)
+            ON CONFLICT(contribution) DO NOTHING""",
+                           (task["entry"]["id"], error, canonical(task["entry"])))
+
+
+def sync(archive, library, payload_profile=None, *, startup_batch=None, generator=None):
+    from .pipeline import startup_detail, startup_step
+
+    for task in queue(archive, startup_batch=startup_batch):
+        tracking = (startup_step(archive, startup_batch, task["entry"]["id"]) if startup_batch is not None
+                    else contextlib.nullcontext())
+        with tracking as progress:
+            def observe(stage, detail):
+                if startup_batch is not None:
+                    startup_detail(archive, startup_batch, task["entry"]["id"], f"{stage}: {detail}")
+
+            result = prepare_admission(task, archive.directory, generator, library, payload_profile, observe)
+            birth = finish_admission(archive, task, result)
             if progress is not None:
-                progress.update(status="complete" if ready else "rejected", birth=birth,
-                                detail=error or "Load-only admission passed; walking qualification is separate.")
+                progress.update(status="complete" if result["status"] == "eligible" else "rejected", birth=birth,
+                                detail=result["error"] or "Load-only admission passed; walking qualification is separate.")
 
 
 def choose(archive, seed, proposal):

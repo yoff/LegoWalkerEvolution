@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -246,6 +247,27 @@ class EpisodeController:
             return launch(self)
 
 
+class DashboardServer(ThreadingHTTPServer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.forest_mutex = threading.Lock()
+        self.forest_cache = None
+
+    def campaign_forest(self, versions, active):
+        directory = Path(next(version["archive"] for version in versions if version["id"] == active))
+        page = (directory / "index.html").stat()
+        key = (tuple((version["id"], version["archive"]) for version in versions),
+               active, page.st_mtime_ns, page.st_size)
+        with self.forest_mutex:
+            if self.forest_cache is not None:
+                previous, generated, content = self.forest_cache
+                if previous == key and time.monotonic() - generated < 10:
+                    return content
+            content = campaign_snapshot(versions, active)
+            self.forest_cache = (key, time.monotonic(), content)
+            return content
+
+
 class DashboardHandler(SimpleHTTPRequestHandler):
     def __init__(self, request, client_address, server):
         super().__init__(request, client_address, server, directory=str(server.controller.directory))
@@ -332,6 +354,17 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             except (OSError, sqlite3.Error) as error:
                 self.log_error("Status failed: %s", error)
                 self.json_response(500, {"error": str(error)})
+        elif path.path == "/migration.log" and isinstance(self.server.controller, CampaignController):
+            log = self.server.controller.root / "migration.log"
+            if not log.is_file():
+                self.send_error(404, "No preparation log is available.")
+                return
+            body = log.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif isinstance(self.server.controller, CampaignController) and urlsplit(self.path).path == "/api/history":
             self.json_response(200, self.server.controller.history())
         elif isinstance(self.server.controller, CampaignController) and urlsplit(self.path).path == "/history.html":
@@ -340,7 +373,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             controller = self.server.controller
             if isinstance(controller, CampaignController):
                 with controller.mutex:
-                    forest = campaign_snapshot(controller.state["versions"], controller.state["active"])
+                    versions = [dict(version) for version in controller.state["versions"]]
+                    active = controller.state["active"]
+                forest = self.server.campaign_forest(versions, active)
             else:
                 forest = snapshot(controller.directory)
             self.json_response(200, {"html": forest})
@@ -527,7 +562,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             controller = self.server.controller
             if campaign:
                 with campaign.mutex:
-                    forest = campaign_snapshot(campaign.state["versions"], campaign.state["active"])
+                    versions = [dict(version) for version in campaign.state["versions"]]
+                    active = campaign.state["active"]
+                forest = self.server.campaign_forest(versions, active)
             else:
                 forest = snapshot(controller.directory, details=True)
             self.html_response(document("Proposal ancestry forest", '<a href="/">Back to dashboard</a>'
@@ -536,7 +573,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if campaign and path.path in ("/", "/index.html", "/preview.html"):
             with campaign.mutex:
                 text = campaign.dashboard_page()
-                forest = campaign_snapshot(campaign.state["versions"], campaign.state["active"])
+                versions = [dict(version) for version in campaign.state["versions"]]
+                active = campaign.state["active"]
+            forest = self.server.campaign_forest(versions, active)
             text = insert(text, forest)
             self.html_response(category_anchors(text), head=head)
             return
@@ -675,9 +714,10 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, default=ROOT / "output/evolution-interactive")
     parser.add_argument("--campaign", type=Path, help="Stable experiment registry; adopt this archive and its upgrades")
     parser.add_argument("--defer-upgrade", action="store_true",
-                        help="Serve the existing campaign immediately; prepare updates on the next explicit action")
+                        help="Compatibility flag: campaigns always defer rebuilding until explicit preparation")
     parser.add_argument("--describe-protocol", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--prepare-only", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--defer-construction", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--initial-budget", type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument("--compatible-archive", type=Path, action="append", default=[], help=argparse.SUPPRESS)
     parser.add_argument("--ldraw-library", type=Path, default=ROOT / ".tools/ldraw")
@@ -723,25 +763,35 @@ def main(argv=None):
             raise AdapterError("Version preparation requires native discovery without a nested experiment registry.")
         if args.campaign:
             args.cycle_aware = True
+            args.defer_construction = True
         options = EvaluationOptions(duration=20, timestep=.002, capture_poses=True,
                                     cycle_aware=args.cycle_aware, short_gate=args.short_gate)
         generator = Generator(args.dotnet.resolve(), args.generator.resolve())
         protocol = protocol_definition(generator, args.ldraw_library.resolve(), options, load_profile(args.payload_profile))
         def current_inputs(source):
+            descriptor = Path(source) / "seeds.json"
+            rechecks = descriptor.exists() and json.loads(descriptor.read_text()).get("requalificationBatches")
+            if args.defer_construction and not rechecks:
+                return source
             from .native_episode import refresh_seed_exports
             return refresh_seed_exports(source, args.campaign / "input-exports", generator)
+        frozen_campaign = False
         if args.campaign and args.candidate_batch is not None:
             registry = args.campaign / "campaign.json"
             if registry.exists():
                 state = json.loads(registry.read_text())
                 version = next(v for v in state["versions"] if v["id"] == state["active"])
                 args.candidate_batch = Path(version["archive"]) / "native-input"
-            args.candidate_batch = current_inputs(args.candidate_batch)
-        if args.candidate_batch is not None:
+                frozen_campaign = not args.describe_protocol and not args.prepare_only
+                if frozen_campaign:
+                    protocol = definition(Path(version["archive"]))
+            if not frozen_campaign:
+                args.candidate_batch = current_inputs(args.candidate_batch)
+        if args.candidate_batch is not None and not frozen_campaign:
             from .native_episode import native_protocol
             protocol = native_protocol(protocol, args.candidate_batch.resolve(), discover=args.discover,
                                        reuse_archives=args.reuse_archive, simulation_workers=args.simulation_workers,
-                                       screening_workers=args.screening_workers)
+                                       screening_workers=args.screening_workers, defer_construction=args.defer_construction)
         if args.compatible_archive:
             from .campaign import observation_sources
             compatible = observation_sources(args.compatible_archive, protocol, target=args.output)
@@ -808,6 +858,8 @@ def main(argv=None):
                     screening = args.screening_workers
                 if screening is not None:
                     command += ["--screening-workers", str(screening)]
+                if selected.get("deferredConstruction") or (not selected and args.defer_construction):
+                    command += ["--defer-construction"]
                 return command
 
             def load(directory):
@@ -836,7 +888,8 @@ def main(argv=None):
                         from .native_episode import stage_native
                         from .observations import reuse_observations
                         stage_native(archive, source)
-                        reuse_observations(archive, args.ldraw_library)
+                        if not selected.get("deferredConstruction"):
+                            reuse_observations(archive, args.ldraw_library)
                     if args.campaign or args.prepare_only:
                         from .evolution import freeze_runtime
                         from .bridge import write_json
@@ -849,11 +902,6 @@ def main(argv=None):
                             value.worker_args += ["--payload-profile", str(profile)]
                         verify_snapshot(Path(directory))
                         value.pinned = True
-                    if (args.prepare_only and (Path(directory) / "campaign-version.json").exists()
-                            and not selected.get("requalificationCandidates")):
-                        from .user_pool import sync
-                        sync(archive, args.ldraw_library, Path(directory) / "protocol-source/selected-payloads.json",
-                             generator=generator)
                     publish(archive)
                 finally:
                     archive.db.close()
@@ -876,20 +924,14 @@ def main(argv=None):
                                 "--initial-budget", str(allowance), "--seed", str(args.seed)]
                     for version in controller.state["versions"]:
                         command += ["--compatible-archive", version["archive"]]
-                    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+                    with (args.campaign / "migration.log").open("a") as log:
+                        result = subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, text=True)
                     if result.returncode:
-                        raise AdapterError(f"Frozen version preparation failed: {result.stderr.strip()}")
+                        raise AdapterError(f"Frozen version preparation failed (exit code {result.returncode}); see migration.log.")
                     return load(directory)
                 controller = CampaignController(args.campaign, args.output, load=load, build=prepare_version,
                                                 describe=describe, generator=generator)
-                try:
-                    current = controller.active.status(automatic_previews=False)
-                    if args.defer_upgrade or current["running"] or current["rendering"]["running"]:
-                        print("Implementation update deferred; existing runtime remains active until an explicit action.", flush=True)
-                    else:
-                        controller.ensure_latest()
-                except (AdapterError, OSError, sqlite3.Error, ValueError) as error:
-                    print(f"ERROR: Update failed; previous version retained: {error}", file=sys.stderr, flush=True)
+                print("Rebuilding/migration requires explicit preparation; Resume never prepares or migrates.", flush=True)
             else:
                 controller = build(args.output, args.candidate_batch.resolve() if args.candidate_batch else None,
                                    protocol, args.initial_budget)
@@ -897,7 +939,7 @@ def main(argv=None):
                     print(json.dumps({"prepared": str(controller.directory),
                                       "budget": controller.status(automatic_previews=False)["budget"]}))
                     return 0
-            with ThreadingHTTPServer(("127.0.0.1", args.port), DashboardHandler) as server:
+            with DashboardServer(("127.0.0.1", args.port), DashboardHandler) as server:
                 server.controller = controller
                 print(f"Live dashboard: http://127.0.0.1:{server.server_port}/ ; no episode starts until you press the button.", flush=True)
                 server.serve_forever()

@@ -121,7 +121,39 @@ test("legacy snapshots use their bounded items rather than inventing unseen walk
   const {root} = harness({stages: [{id: "queued", label: "Queued", count: 9, items: [item]}], recent: []});
   const rows = all(byId(root, "pipeline-board-queued")).filter(node => node.className === "pipeline-mini");
   assert.equal(rows.length, 1);
-  assert(all(root).some(node => node.textContent === "Queued (9)"));
+  assert(all(root).some(node => node.textContent === "Queued / awaiting processing (9)"));
+});
+
+test("initial queue precedes planning and building across overview, board and details", () => {
+  const stages = ["planning", "building", "queued", "screening"].map(id => ({
+    id, label: id === "queued" ? "Pending / awaiting screening" : id,
+    count: 0, items: [], walkers: [],
+  }));
+  const {root} = harness({stages, recent: []});
+  const order = ["queued", "planning", "building", "screening"];
+  const summary = all(root).find(node => node.className === "pipeline-summary");
+  assert.deepEqual(summary.children.slice(0, 4).map(node => node.href),
+    order.map(id => `#pipeline-board-${id}`));
+  assert.equal(summary.children[0].textContent, "Queued / awaiting processing: 0");
+  assert.deepEqual(all(root).filter(node => order.some(id => node.id === `pipeline-board-${id}`))
+    .map(node => node.id), order.map(id => `pipeline-board-${id}`));
+  assert.deepEqual(root.children.filter(node => order.some(id => node.id === `pipeline-${id}`))
+    .map(node => node.id), order.map(id => `pipeline-${id}`));
+  assert(!all(root).some(node => node.textContent.includes("Pending / awaiting screening")));
+  assert.deepEqual(stages.map(stage => stage.id), ["planning", "building", "queued", "screening"]);
+});
+
+test("admission overflow without a birth links to its stage rather than a null history", () => {
+  const admission = make("admission-extra", {
+    birth: null, history: null, name: "Contribution still building", visuals: {},
+  });
+  const {root} = harness({stages: [
+    {id: "building", label: "Building", count: 1, items: [], walkers: [admission]},
+  ], recent: []});
+  const row = all(byId(root, "pipeline-board-building")).find(node => node.className === "pipeline-mini");
+  assert.equal(row.href, "#pipeline-building");
+  assert(all(row).some(node => node.textContent === admission.name));
+  assert(byId(root, "pipeline-building"));
 });
 
 test("recent outcome symbols use recorded qualification and distinguish rejection, failure and unknown results", () => {

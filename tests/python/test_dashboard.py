@@ -13,18 +13,22 @@ from urllib.request import Request, urlopen
 import pytest
 
 from legowalkers_sim.bridge import AdapterError
-from legowalkers_sim.dashboard import DashboardHandler, EpisodeController
+from legowalkers_sim.dashboard import DashboardHandler, DashboardServer, EpisodeController
 from legowalkers_sim.evolution import Archive, CATEGORIES, GRAMMAR, SEARCH_POLICY, category_genome
 from test_evolution import genome, protocol, result
 
 
-def test_prepared_campaign_admission_uses_frozen_profile_path_without_starting_workers(tmp_path, monkeypatch):
+def test_preparation_queues_historical_inputs_without_export_build_or_admission(tmp_path, monkeypatch):
     from legowalkers_sim import dashboard, evolution, observations, user_pool
     from legowalkers_sim.bridge import write_json
     from legowalkers_sim.payload import load_profile
     from test_native_episode import native_fixture
 
     source, _ = native_fixture(tmp_path)
+    manifest = source / "candidate-0/manifest.json"
+    original = json.loads(manifest.read_text())
+    original["simulator"]["revision"] = "0"*40
+    write_json(manifest, original)
     target, campaign = tmp_path / "prepared", tmp_path / "campaign"
     write_json(target / "campaign-version.json", {"campaign": str(campaign), "version": "v0002"})
     write_json(campaign / "campaign.json", {
@@ -33,19 +37,22 @@ def test_prepared_campaign_admission_uses_frozen_profile_path_without_starting_w
     monkeypatch.setattr(evolution, "freeze_runtime", lambda *args: None)
     monkeypatch.setattr(dashboard, "verify_snapshot", lambda path: path / "protocol-source")
     monkeypatch.setattr(observations, "reuse_observations", lambda *args: None)
-    calls = []
-
-    def sync(archive, library, payload_profile, *, generator):
-        assert payload_profile == target / "protocol-source/selected-payloads.json"
-        assert load_profile(payload_profile) == archive.protocol()["payloadProfile"]
+    monkeypatch.setattr(user_pool, "sync", lambda *args, **kwargs: pytest.fail("Preparation must not admit contributions"))
+    monkeypatch.setattr(evolution.Generator, "invoke", lambda *args: pytest.fail("Preparation must not export or build walkers"))
+    assert dashboard.main(["--prepare-only", "--output", str(target), "--candidate-batch", str(source),
+                           "--discover", "--defer-construction", "--simulation-workers", "1", "--initial-budget", "3"]) == 0
+    archive = Archive(target)
+    try:
+        assert load_profile(target / "protocol-source/selected-payloads.json") == archive.protocol()["payloadProfile"]
+        assert archive.protocol()["deferredConstruction"] == "queued-motion-inputs-v1"
         assert archive.db.execute("SELECT budget FROM run").fetchone()[0] == 3
         assert archive.counts() == {}
-        calls.append(payload_profile)
-
-    monkeypatch.setattr(user_pool, "sync", sync)
-    assert dashboard.main(["--prepare-only", "--output", str(target), "--candidate-batch", str(source),
-                           "--discover", "--simulation-workers", "1", "--initial-budget", "3"]) == 0
-    assert len(calls) == 1
+        assert (target / "native-input/candidate-0/manifest.json").read_bytes() == manifest.read_bytes()
+        from legowalkers_sim.bridge import load_manifest
+        with pytest.raises(AdapterError, match="different simulator revision"):
+            load_manifest(target / "native-input/candidate-0/manifest.json")
+    finally:
+        archive.db.close()
 
 
 def test_dashboard_explains_empty_running_pipeline_without_inventing_candidate_activity():
@@ -69,6 +76,200 @@ state.pipeline.tracked = false;
 assert.match(pipelineNotice(state), /frozen version does not record/);
 """
     subprocess.run(["node", "-e", code], check=True, capture_output=True, text=True)
+
+
+def test_dashboard_polls_only_visible_tabs_and_throttles_unchanged_forests():
+    script = (Path(__file__).parents[2] / "simulator/legowalkers_sim/dashboard.js").read_text()
+    poll = script[script.index("    async function poll()"):script.index("    updateNavigation();\n    poll();")]
+    forest = script[script.index('        const forest = document.getElementById("proposal-forest");'):
+                    script.index("\n    previewRetry.addEventListener")]
+    code = """
+const assert = require("node:assert/strict");
+let updates = 0, delay, now = 0, requests = 0, patches = 0;
+let forestRevision = null, forestUpdatedAt = -Infinity;
+const document = {hidden: false, getElementById() {return {};}};
+const performance = {now: () => now};
+const update = async () => {updates++;};
+const setTimeout = (_, value) => {delay = value;};
+const request = async url => {assert.equal(url, "/api/forest"); requests++; return {html: "forest"};};
+const DOMParser = class {parseFromString() {return {getElementById: () => ({})};}};
+const patch = () => {patches++;};
+""" + poll + "\nasync function refresh(state) {\n" + forest + """
+(async () => {
+  await poll(); assert.equal(updates, 1); assert.equal(delay, 2000);
+  document.hidden = true;
+  await poll(); assert.equal(updates, 1); assert.equal(delay, 10000);
+  document.hidden = false;
+  await poll(); assert.equal(updates, 2);
+  await refresh({revision: "a"}); assert.equal(requests, 1);
+  now = 2000; await refresh({revision: "a"}); assert.equal(requests, 1);
+  now = 10000; await refresh({revision: "a"}); assert.equal(requests, 2);
+  now = 10001; await refresh({revision: "b"}); assert.equal(requests, 3);
+  assert.equal(patches, 3);
+})().catch(error => {console.error(error); process.exitCode = 1;});
+"""
+    subprocess.run(["node", "-e", code], check=True, capture_output=True, text=True)
+
+
+def test_campaign_controls_show_explicit_preparation_progress_failure_and_readiness():
+    script = (Path(__file__).parents[2] / "simulator/legowalkers_sim/dashboard.js").read_text()
+    controls = script[script.index("    async function update()"):script.index("        status.textContent = state.running")] + "\n}"
+    code = """
+const assert = require("node:assert/strict");
+const element = () => ({textContent: "", append(...items) {
+    this.textContent += items.map(item => typeof item === "string" ? item : item.textContent).join("");
+}});
+const runtimeStatus = element(), upgrade = element(), upgradeStatus = element();
+const experimentHistory = element(), button = element();
+const document = {createElement: element};
+let token, running, canStart, upgrading = false, starting = false;
+const state = {campaign: "campaign", version: "v0001", running: false, canStart: false,
+    updateAvailable: true, remaining: 2, rendering: {running: false}, simulationWorkers: 2,
+    migration: {status: "required"}};
+const request = async () => state;
+""" + controls + """
+(async () => {
+    await update();
+    assert.equal(button.disabled, true);
+    assert.match(button.textContent, /Resume.*preparation required/);
+    assert.equal(upgrade.disabled, false);
+    assert.match(upgradeStatus.textContent, /Explicit preparation required/);
+    state.migration = {status: "running", started: new Date().toISOString(),
+        stage: "Rebuilding retained plans.", targetVersion: "v0002", log: "/migration.log"};
+    await update();
+    assert.equal(button.disabled, true);
+    assert.equal(upgrade.disabled, true);
+    assert.match(upgradeStatus.textContent, /Rebuilding retained plans.*v0002.*Elapsed.*Preparation log/);
+    state.migration = {status: "failed", error: "Construction timed out"};
+    await update();
+    assert.equal(button.disabled, true);
+    assert.equal(upgrade.disabled, false);
+    assert.match(upgradeStatus.textContent, /Preparation failed.*timed out/);
+    state.migration = {status: "ready"};
+    state.canStart = true;
+    state.updateAvailable = false;
+    await update();
+    assert.equal(button.disabled, false);
+    assert.match(button.textContent, /Resume episode/);
+    assert.match(upgradeStatus.textContent, /Ready to resume/);
+})().catch(error => {console.error(error); process.exitCode = 1;});
+"""
+    subprocess.run(["node", "-e", code], check=True, capture_output=True, text=True)
+
+
+def test_preparation_and_resume_controls_appear_together_before_candidate_pipeline():
+    from legowalkers_sim.gallery import document
+
+    html = document("Dashboard", "", dashboard=True)
+    assert html.index('id="prepare-upgrade"') < html.index('id="start-episode"') < html.index('id="candidate-pipeline"')
+    assert html.index('id="upgrade-status"') < html.index('id="candidate-pipeline"')
+
+
+@pytest.mark.parametrize("path", ["/api/forest", "/forest.html", "/"])
+def test_campaign_forest_rendering_does_not_block_status(path, tmp_path, monkeypatch):
+    from legowalkers_sim import dashboard
+    from legowalkers_sim.campaign import CampaignController
+
+    campaign = CampaignController.__new__(CampaignController)
+    campaign.mutex = threading.RLock()
+    campaign.state = {"active": "v0001", "versions": [{"id": "v0001", "archive": str(tmp_path)}]}
+    campaign.dashboard_page = lambda: "<html><main id=\"dashboard-content\"></main></html>"
+
+    def status():
+        with campaign.mutex:
+            return {"running": False, "remaining": 3}
+
+    campaign.status = status
+    (tmp_path / "index.html").write_text("Current results")
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def forest(versions, active):
+        calls.append(active)
+        assert versions == [{"id": "v0001", "archive": str(tmp_path)}]
+        assert active == "v0001"
+        assert versions is not campaign.state["versions"]
+        entered.set()
+        assert release.wait(5)
+        return "<section id=\"proposal-forest\"></section>"
+
+    monkeypatch.setattr(dashboard, "campaign_snapshot", forest)
+    with DashboardServer(("127.0.0.1", 0), DashboardHandler) as server:
+        server.controller = campaign
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        url = f"http://127.0.0.1:{server.server_port}"
+        outcomes, failures = [], []
+
+        def read_forest():
+            try:
+                with urlopen(url + path, timeout=5) as response:
+                    outcomes.append(response.status)
+                    response.read()
+            except Exception as error:
+                failures.append(error)
+
+        reader = threading.Thread(target=read_forest)
+        second_reader = threading.Thread(target=read_forest)
+        reader.start()
+        second_reader.start()
+        try:
+            assert entered.wait(3)
+            with urlopen(url + "/api/status", timeout=1) as response:
+                assert json.load(response) == {"running": False, "remaining": 3}
+        finally:
+            release.set()
+            reader.join(timeout=5)
+            second_reader.join(timeout=5)
+            server.shutdown()
+            thread.join(timeout=5)
+        assert not failures
+        assert outcomes == [200, 200]
+        assert calls == ["v0001"]
+
+
+def test_campaign_forest_cache_shares_work_expires_and_tracks_result_revisions(tmp_path, monkeypatch):
+    from legowalkers_sim import dashboard
+
+    page = tmp_path / "index.html"
+    page.write_text("Current results")
+    versions = [{"id": "v0001", "archive": str(tmp_path)}]
+    clock, calls = [0], []
+    monkeypatch.setattr(dashboard.time, "monotonic", lambda: clock[0])
+
+    def forest(versions, active):
+        calls.append((versions, active))
+        return f"Forest {len(calls)}"
+
+    monkeypatch.setattr(dashboard, "campaign_snapshot", forest)
+    with DashboardServer(("127.0.0.1", 0), DashboardHandler) as server:
+        assert server.campaign_forest(versions, "v0001") == "Forest 1"
+        clock[0] = 9
+        assert server.campaign_forest([dict(version) for version in versions], "v0001") == "Forest 1"
+        clock[0] = 10
+        assert server.campaign_forest(versions, "v0001") == "Forest 2"
+        page.write_text("Newly published current results")
+        assert server.campaign_forest(versions, "v0001") == "Forest 3"
+        newer = versions + [{"id": "v0002", "archive": str(tmp_path)}]
+        assert server.campaign_forest(newer, "v0002") == "Forest 4"
+
+
+def test_campaign_forest_cache_does_not_hide_generation_failure(tmp_path, monkeypatch):
+    from legowalkers_sim import dashboard
+
+    (tmp_path / "index.html").write_text("Current results")
+    versions = [{"id": "v0001", "archive": str(tmp_path)}]
+
+    def failing(*args):
+        raise AdapterError("Ancestry evidence unavailable")
+
+    monkeypatch.setattr(dashboard, "campaign_snapshot", failing)
+    with DashboardServer(("127.0.0.1", 0), DashboardHandler) as server:
+        with pytest.raises(AdapterError, match="Ancestry evidence unavailable"):
+            server.campaign_forest(versions, "v0001")
+        assert server.forest_cache is None
+        monkeypatch.setattr(dashboard, "campaign_snapshot", lambda *args: "Recovered ancestry")
+        assert server.campaign_forest(versions, "v0001") == "Recovered ancestry"
 
 
 def test_startup_card_renders_named_states_elapsed_time_and_navigation_without_fake_births():

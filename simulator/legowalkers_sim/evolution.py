@@ -856,6 +856,7 @@ def main(argv=None):
     parser.add_argument("--candidate-batch", type=Path,
                         help="Evaluate an immutable whole-walker realization batch instead of legacy evolution")
     parser.add_argument("--discover", action="store_true", help="Evolve native motion programs after evaluating founders")
+    parser.add_argument("--defer-construction", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--cycle-aware", action="store_true", help="Bound runtime from gearing and require repeatable complete gait cycles")
     parser.add_argument("--short-gate", type=float, default=2.0,
                         help="Early safety gate after settling, in driven seconds (default: 2; 0 disables)")
@@ -903,7 +904,7 @@ def main(argv=None):
             from .native_episode import native_protocol
             protocol = native_protocol(protocol, args.candidate_batch.resolve(), discover=args.discover,
                                        reuse_archives=args.reuse_archive, simulation_workers=args.simulation_workers,
-                                       screening_workers=args.screening_workers)
+                                       screening_workers=args.screening_workers, defer_construction=args.defer_construction)
         from .campaign import require_active
         require_active(args.output.resolve())
         with locked(args.output.resolve()):

@@ -78,7 +78,7 @@ def begin_startup(archive):
     queue_startup(archive, batch, [
         ("candidates", "startup", "Preparing immutable candidates"),
         ("observations", "startup", "Restoring retained measurements"),
-        ("contributions", "startup", "Admitting user contributions"),
+        ("contributions", "startup", "Queuing user contributions"),
         ("recovery", "startup", "Recovering interrupted candidate work"),
     ])
     return batch
@@ -97,7 +97,7 @@ def queue_startup(archive, batch, tasks):
 
 
 def update_startup(archive, batch, task, status, detail="", birth=None):
-    if status not in ("running", "complete", "rejected", "failed"):
+    if status not in ("running", "complete", "rejected", "failed", "interrupted"):
         raise AdapterError(f"Invalid startup outcome: {status}.")
     timestamp = datetime.now(timezone.utc).isoformat()
     with archive.db:
@@ -110,6 +110,15 @@ def update_startup(archive, batch, task, status, detail="", birth=None):
             UPDATE pipeline_startup SET status=?,detail=?,birth=?,
                 started=coalesce(started,?),completed=? WHERE batch=? AND task=?
         """, (status, detail, birth, timestamp, None if status == "running" else timestamp, batch, task))
+
+
+def startup_detail(archive, batch, task, detail):
+    with archive.db:
+        row = archive.db.execute("""
+            UPDATE pipeline_startup SET detail=? WHERE batch=? AND task=? AND status='running'
+        """, (detail, batch, task))
+        if row.rowcount != 1:
+            raise AdapterError(f"Startup task {task} is not running; cannot report progress.")
 
 
 @contextmanager
@@ -241,7 +250,7 @@ def compact_walker(item, names):
     return {
         **{key: item[key] for key in ("key", "birth", "history", "stage", "visuals")},
         "name": (f"Proposal {item['proposal']} (parent B{item['birth']})" if item.get("proposal")
-                 else names.get(item["birth"], f"Birth {item['birth']}")),
+                 else item.get("name") or names.get(item["birth"], f"Birth {item['birth']}")),
         "parentPreview": bool(item.get("parentPreview")),
         "qualification": item.get("qualification"),
     }
@@ -389,15 +398,32 @@ def snapshot(db, directory, *, running, tracked, limit=8):
             groups[stage].append(item)
         else:
             recent.append(item)
+    startup = startup_snapshot(db, running, directory)
+    for admission in startup["items"]:
+        if admission["kind"] != "admission" or admission["status"] != "running":
+            continue
+        stage = admission["detail"].partition(":")[0]
+        if stage not in ("planning", "building", "screening"):
+            stage = "planning"
+        counts[stage] += 1
+        groups[stage].append({
+            "key": admission["key"], "birth": None, "history": None, "stage": stage,
+            "name": admission["label"], "category": "Contribution admission",
+            "pid": admission["pid"], "log": admission["log"], "detail": admission["detail"],
+            "visuals": admission.get("visuals", {}), "screening": admission.get("screening"),
+            "qualification": None, "trial": None,
+        })
     recent.sort(key=lambda item: item["updated"], reverse=True)
+    def order(item):
+        return item["birth"] is None, item["birth"] or 0, item["key"]
     return {
         "tracked": tracked,
         "qualified": recent_qualified(qualified_walkers(db, directory)),
-        "startup": startup_snapshot(db, running, directory),
+        "startup": startup,
         "stages": [{"id": stage, "label": label, "count": counts[stage],
-                    "items": sorted(groups[stage], key=lambda item: item["birth"])[:limit],
+                    "items": sorted(groups[stage], key=order)[:limit],
                     "walkers": [compact_walker(item, names) for item in
-                                sorted(groups[stage], key=lambda item: item["birth"])]}
+                                sorted(groups[stage], key=order)]}
                    for stage, label in STAGES.items()],
         "recent": recent[:limit],
         "finished": {"count": len(recent), "walkers": [compact_walker(item, names) for item in recent]},

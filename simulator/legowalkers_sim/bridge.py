@@ -81,7 +81,8 @@ def _finite_float(value):
     return number
 
 
-def load_manifest(path: Path) -> dict:
+def load_manifest(path: Path, *, motion_source=False) -> dict:
+    """Validate input metadata; historical revisions are source intent only, never admission."""
     data = json.loads(path.read_text(encoding="utf-8"), parse_constant=_reject_constant,
                       parse_float=_finite_float)
     errors = sorted(jsonschema.Draft202012Validator(MANIFEST_SCHEMA).iter_errors(data),
@@ -89,7 +90,7 @@ def load_manifest(path: Path) -> dict:
     if errors:
         raise AdapterError("Invalid manifest: " + "; ".join(
             f"{list(error.path)}: {error.message}" for error in errors[:10]))
-    if data["simulator"]["revision"] != SIMULATOR_REVISION:
+    if not motion_source and data["simulator"]["revision"] != SIMULATOR_REVISION:
         raise AdapterError("Manifest targets a different simulator revision.")
     model = (path.parent / data["modelFile"]).resolve()
     if model.parent != path.parent.resolve():

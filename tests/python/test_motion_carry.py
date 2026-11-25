@@ -1,15 +1,19 @@
 import json
 import sqlite3
+import subprocess
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from legowalkers_sim import motion_carry, native_episode
-from legowalkers_sim.bridge import AdapterError, load_manifest
-from legowalkers_sim.evolution import Generator
+from legowalkers_sim.bridge import AdapterError, SIMULATOR_REVISION, load_manifest, write_json
+from legowalkers_sim.evolution import Archive, Generator
 from test_native_discovery import Proposals, setup_discovery
 from test_native_episode import native_fixture
+from test_native_discovery import mock_constructor
+from test_evolution import protocol
 
 
 def pending(archive):
@@ -65,6 +69,79 @@ def test_construction_rejection_keeps_motion_source_without_spending_budget(tmp_
         assert archive.db.execute("SELECT status FROM births WHERE id=1").fetchone()[0] == "construction-rejected"
         result = json.loads((archive.directory / "motion-builds/000001/result.json").read_text())
         assert len(result["attempts"]) == 2 and result["dynamicTrials"] == 0
+    finally:
+        archive.db.close()
+
+
+def test_historical_motion_is_queued_unchanged_then_imported_and_built_with_live_progress(tmp_path, monkeypatch):
+    source, _ = native_fixture(tmp_path)
+    manifest_path = source / "candidate-0/manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["simulator"]["revision"] = "0"*40
+    write_json(manifest_path, manifest)
+    original = manifest_path.read_bytes()
+    base = protocol()
+    mock_constructor(tmp_path, monkeypatch, base)
+    archive = Archive(tmp_path / "deferred")
+    archive.initialize(native_episode.native_protocol(base, source, discover=True, defer_construction=True), 1, 42, False)
+    calls = []
+
+    class Compiler(Proposals):
+        def invoke(self, *args):
+            calls.append(args[0])
+            parent = (Path(args[args.index("--parent")+1]) if "--parent" in args
+                      else Path(args[args.index("--program")+1]).parent)
+            target = Path(args[args.index("--output")+1]) / "candidate-001"
+            shutil.copytree(parent, target)
+            current = json.loads((target / "manifest.json").read_text())
+            current["simulator"]["revision"] = SIMULATOR_REVISION
+            write_json(target / "manifest.json", current)
+            if args[0] == "migrate-walker-legs":
+                write_json(target.parent / "leg-family-conversion.json",
+                           {"status": "no-matching-legs", "families": [], "unmatched": []})
+
+        def build_native(self, parent, output, **kwargs):
+            calls.append("build")
+            assert archive.db.execute("SELECT stage FROM pipeline_events ORDER BY id DESC LIMIT 1").fetchone()[0] == "building"
+            return super().build_native(parent, output, **kwargs)
+
+    try:
+        native_episode.stage_native(archive, source)
+        assert calls == [] and archive.counts() == {}
+        checked = SimpleNamespace(manifest=manifest)
+        with pytest.raises(AdapterError, match="inherited hardware"):
+            motion_carry.require_construction(archive, 1, checked)
+        compiled = motion_carry.ensure_pending(archive, pending(archive), Compiler(), tmp_path)
+        assert calls == ["realize-walker", "migrate-walker-legs", "build"]
+        assert manifest_path.read_bytes() == original
+        assert (archive.directory / "native-input/candidate-0/manifest.json").read_bytes() == original
+        checked.manifest = load_manifest(archive.directory / compiled["batch"] / compiled["directory"] / "manifest.json")
+        motion_carry.require_construction(archive, compiled["birth"], checked)
+        assert archive.counts() == {}
+    finally:
+        archive.db.close()
+
+
+def test_construction_timeout_is_recorded_without_spending_or_repeating_work(tmp_path, monkeypatch):
+    source, _, archive, _ = setup_discovery(tmp_path, monkeypatch)
+    calls = []
+
+    def timeout(*args, **kwargs):
+        calls.append(args)
+        args[2].mkdir()
+        (args[2] / "partial.txt").write_text("unfinished")
+        raise subprocess.TimeoutExpired(["build-walker"], 600)
+
+    monkeypatch.setattr(Proposals, "build_native", timeout)
+    try:
+        native_episode.stage_native(archive, source)
+        assert motion_carry.ensure_pending(archive, pending(archive), Proposals(), tmp_path) is None
+        result = json.loads((archive.directory / "motion-builds/000001/result.json").read_text())
+        assert result["status"] == "construction-timeout" and result["dynamicTrials"] == 0
+        assert (archive.directory / "motion-builds/000001/attempt-001/partial.txt").exists()
+        assert archive.db.execute("SELECT status FROM births WHERE id=1").fetchone()[0] == "construction-rejected"
+        assert motion_carry.ensure_pending(archive, pending(archive), Proposals(), tmp_path) is None
+        assert len(calls) == 1 and archive.counts() == {}
     finally:
         archive.db.close()
 

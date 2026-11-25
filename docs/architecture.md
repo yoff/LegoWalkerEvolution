@@ -82,6 +82,29 @@ parts dependencies, payload data and evaluation settings. Campaign updates creat
 new versions; old outcomes are not rewritten to pretend they used new rules.
 Observation reuse requires compatibility.
 
+Preparation is an explicitly requested background operation, separate from
+episode authorization. It freezes runtime/settings and copies fingerprinted source
+inputs, without exporting or constructing walkers. Only progress and atomic version
+activation use the campaign control mutex. Resume requires preparation verified
+against the current source stamp and never initiates runtime migration.
+After Resume, episode workers perform expensive imports, construction and admission
+with per-input progress in the existing pipeline. Construction rejection or timeout
+is an individual recorded outcome, not a failed version migration. Historical
+assemblies remain source advice; they cannot bypass current construction receipts
+or admission. Partial attempts remain archived without automatic retries.
+
+Contribution admission uses isolated processes in the same bounded pool as native
+screening, not a serial startup barrier. The scheduler alternates available
+contribution and ordinary candidate work, accepts finished admissions immediately,
+and alone mutates archive and trial accounting. Unscheduled admissions wait for
+another authorized episode once the trial allowance or cheap gate limit is reached;
+already-running admissions finish without reserving trials. Interrupted admissions
+retain their diagnostics and partial files rather than automatically rebuilding.
+Ordinary import, mass estimation and construction use the same isolated worker
+boundary. Children return saved construction receipts; the scheduler validates and
+binds them before reserving exact screening checks. New mutation proposals wait for
+an idle pipeline rather than blocking the coordinator while workers have results.
+
 The SQLite archive records proposals, births, exact checks, cheap simulation
 attempts and full trials separately. A short unsafe prefix can reject a candidate
 without using a full-trial slot. Once a full trial is reserved, interruption is

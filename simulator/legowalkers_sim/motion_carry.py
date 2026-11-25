@@ -71,7 +71,7 @@ def _centering(parent, library, profile):
     return {"payload-battery": position}, layout
 
 
-def rebuild(parent, output, generator, library, payload_profile=None, *, preserve_layout=False):
+def rebuild(parent, output, generator, library, payload_profile=None, *, preserve_layout=False, observer=None):
     parent, output = Path(parent).resolve(), Path(output).resolve()
     manifest = load_manifest(parent / "manifest.json")
     source = {"genotypeId": manifest["motion"]["genotypeId"],
@@ -92,6 +92,8 @@ def rebuild(parent, output, generator, library, payload_profile=None, *, preserv
             raise AdapterError("Existing motion construction belongs to a different source or constructor.")
         return previous
     output.mkdir(parents=True)
+    if observer is not None:
+        observer("planning", "Estimating source mass layout and current construction preferences.")
     hints, layout, diagnostics = None, None, []
     if not preserve_layout:
         try:
@@ -108,10 +110,19 @@ def rebuild(parent, output, generator, library, payload_profile=None, *, preserv
     for placements in preferences:
         for layers in POLICY["plateLayers"]:
             folder = output / f"attempt-{len(attempts)+1:03d}"
+            if observer is not None:
+                observer("building", f"Building attempt {len(attempts)+1}/{POLICY['maximumBuildAttempts']}, {layers} plate layer(s).")
             try:
                 summary = generator.build_native(parent, folder, layers=layers, placements=placements)
             except subprocess.TimeoutExpired as error:
-                raise AdapterError("Bounded motion construction timed out; its unfinished obligation is preserved.") from error
+                message = "Bounded motion construction timed out; partial output is preserved and inherited hardware is not substituted."
+                attempts.append({"directory": folder.name, "layers": layers,
+                                 "status": "construction-timeout", "error": str(error)})
+                result = {"status": "construction-timeout", "attempts": attempts, "source": source,
+                          "builderBinaries": binaries, "policy": POLICY, "diagnostics": diagnostics,
+                          "error": message, "dynamicTrials": 0}
+                write_json(output / "result.json", result)
+                return result
             except AdapterError as error:
                 attempts.append({"directory": folder.name, "layers": layers, "status": "construction-rejected",
                                  "error": str(error)})
@@ -171,14 +182,15 @@ def current_pending(archive, pending):
 
 
 def _receipt(archive, pending, generator=None):
-    from .native_episode import _queue
+    from .native_episode import DEFERRED_CONSTRUCTION, _queue
 
     pending = current_pending(archive, pending)
     batch = archive.directory / pending["batch"]
-    summary, files = _queue(batch)
+    path = batch / "motion-carry-forward.json"
+    deferred = archive.protocol().get("deferredConstruction") == DEFERRED_CONSTRUCTION
+    summary, files = _queue(batch, motion_source=deferred and not path.is_file())
     if files != json.loads(pending["files"]):
         raise AdapterError("Motion realization batch changed after its immutable birth.")
-    path = batch / "motion-carry-forward.json"
     if not path.is_file():
         return None
     receipt = json.loads(path.read_text())
@@ -193,21 +205,69 @@ def _receipt(archive, pending, generator=None):
     return receipt
 
 
-def ensure_pending(archive, pending, generator, library, payload_profile=None):
+def source_candidate(archive, pending, generator):
+    from .native_episode import DEFERRED_CONSTRUCTION
+
+    pending = current_pending(archive, pending)
+    return _source_candidate(archive.directory, pending, generator,
+                             archive.protocol().get("deferredConstruction") == DEFERRED_CONSTRUCTION)
+
+
+def _source_candidate(directory, pending, generator, deferred, *, cache=None):
+    from .native_episode import _queue, refresh_seed_exports
+
+    batch = directory / pending["batch"]
+    if deferred:
+        _, files = _queue(batch, motion_source=True)
+        if files != json.loads(pending["files"]):
+            raise AdapterError("Queued motion inputs changed after version preparation.")
+        batch = refresh_seed_exports(batch, cache or directory / "input-exports", generator)
+    return batch / pending["directory"]
+
+
+def construction_task(archive, pending, generator):
+    from .native_episode import DEFERRED_CONSTRUCTION
+
+    if archive.protocol().get("nativeDiscovery", {}).get("motionCarryForward") != POLICY:
+        return None
+    pending = current_pending(archive, pending)
+    if _receipt(archive, pending, generator) is not None:
+        return None
+    birth = archive.db.execute("SELECT operation,status FROM births WHERE id=?", (pending["birth"],)).fetchone()
+    if birth["status"] != "generated":
+        raise AdapterError("Only a pending generated candidate can start construction.")
+    return {"pending": dict(pending), "operation": birth["operation"],
+            "builderBinaries": _binaries(generator),
+            "deferred": archive.protocol().get("deferredConstruction") == DEFERRED_CONSTRUCTION}
+
+
+def prepare_construction(task, directory, generator, library, payload_profile, observe):
+    directory = Path(directory)
+    pending = task["pending"]
+    cache = directory / "construction-inputs" / f"{pending['birth']:06d}"
+    observe("planning", "Importing source intent for current ground-aware construction.")
+    source = _source_candidate(directory, pending, generator, task["deferred"], cache=cache / "exports")
+    if task["deferred"]:
+        from .leg_family_migration import convert
+        batch = convert(source.parent, cache / "legs", generator)
+        source = batch / source.name
+    return rebuild(source, directory / "motion-builds" / f"{pending['birth']:06d}", generator, library, payload_profile,
+                   preserve_layout=task["operation"] in (
+                       "repair-realization", "battery-layout", "receiver-layout", "motor-layout", "motor-direction"),
+                   observer=observe)
+
+
+def finish_construction(archive, task, result):
     from .native_episode import _copy_candidate, _queue
     from .pipeline import record
 
-    if archive.protocol().get("nativeDiscovery", {}).get("motionCarryForward") != POLICY:
-        return pending
-    pending = current_pending(archive, pending)
-    if _receipt(archive, pending, generator) is not None:
-        return pending
-    source = archive.directory / pending["batch"] / pending["directory"]
-    operation = archive.db.execute("SELECT operation FROM births WHERE id=?", (pending["birth"],)).fetchone()[0]
-    record(archive, pending["birth"], "planning", "Carrying motion/control intent into current ground-aware construction.")
+    pending = task["pending"]
+    if (not isinstance(result, dict) or result.get("status") not in (
+            "generated", "construction-rejected", "construction-timeout")):
+        raise AdapterError("Construction worker returned an invalid outcome.")
     output = archive.directory / "motion-builds" / f"{pending['birth']:06d}"
-    result = rebuild(source, output, generator, library, payload_profile,
-                     preserve_layout=operation in ("repair-realization", "battery-layout", "receiver-layout", "motor-layout", "motor-direction"))
+    if json.loads((output / "result.json").read_text()) != result:
+        raise AdapterError("Construction worker result differs from its saved immutable outcome.")
     archive.db.execute("""CREATE TABLE IF NOT EXISTS motion_realizations(
         source_birth INTEGER PRIMARY KEY,target_birth INTEGER,status TEXT NOT NULL,receipt TEXT NOT NULL)""")
     if result["status"] != "generated":
@@ -219,7 +279,13 @@ def ensure_pending(archive, pending, generator, library, payload_profile=None):
         record(archive, pending["birth"], "building", result["error"])
         return None
     batch = Path(result["batch"])
+    if not batch.resolve().is_relative_to(output.resolve()):
+        raise AdapterError("Construction worker returned a batch outside its isolated output.")
     summary, files = _queue(batch)
+    receipt = result.get("receipt", {})
+    if (receipt.get("policy") != POLICY or receipt.get("builderBinaries") != task["builderBinaries"]
+            or receipt.get("dynamicTrials") != 0 or receipt.get("generated") != summary["generated"]):
+        raise AdapterError("Construction worker returned a foreign or incomplete receipt.")
     entry, = summary["generated"]
     native = {"assembly": entry["assemblyId"], "batch": str(batch.relative_to(archive.directory)),
               "directory": entry["directory"], "files": files}
@@ -246,6 +312,22 @@ def ensure_pending(archive, pending, generator, library, payload_profile=None):
     return current_pending(archive, archive.db.execute(
         "SELECT c.*,b.design FROM native_candidates c JOIN births b ON b.id=c.birth WHERE c.birth=?",
         (birth,)).fetchone())
+
+
+def ensure_pending(archive, pending, generator, library, payload_profile=None):
+    from .pipeline import record
+
+    if archive.protocol().get("nativeDiscovery", {}).get("motionCarryForward") != POLICY:
+        return pending
+    birth = archive.db.execute("SELECT status FROM births WHERE id=?", (pending["birth"],)).fetchone()
+    if birth["status"] != "generated":
+        return None
+    task = construction_task(archive, pending, generator)
+    if task is None:
+        return current_pending(archive, pending)
+    result = prepare_construction(task, archive.directory, generator, library, payload_profile,
+                                  lambda stage, detail: record(archive, pending["birth"], stage, detail))
+    return finish_construction(archive, task, result)
 
 
 def require_construction(archive, birth, checked):

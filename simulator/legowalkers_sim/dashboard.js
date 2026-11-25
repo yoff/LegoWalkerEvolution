@@ -95,6 +95,8 @@
     const runtimeStatus = document.getElementById("runtime-status");
     const experimentHistory = document.getElementById("experiment-history");
     let revision = null;
+    let forestRevision = null;
+    let forestUpdatedAt = -Infinity;
     let token = null;
     let starting = false;
     let deferred = false;
@@ -228,10 +230,10 @@
         card.className = "active-trial-card";
         card.dataset.liveKey = `pipeline-${prefix}-${item.key}`;
         const heading = document.createElement("h4");
-        const link = document.createElement("a");
-        link.href = prefix + item.history;
-        link.textContent = item.proposal ? `Proposal ${item.proposal} · parent birth ${item.birth}`
-            : `${item.trial ? `Trial ${item.trial} · ` : ""}Birth ${item.birth}`;
+        const link = document.createElement(item.history ? "a" : "span");
+        if (item.history) link.href = prefix + item.history;
+        link.textContent = item.name || (item.proposal ? `Proposal ${item.proposal} · parent birth ${item.birth}`
+            : `${item.trial ? `Trial ${item.trial} · ` : ""}Birth ${item.birth}`);
         heading.append(link);
         const description = document.createElement("p");
         description.className = "muted";
@@ -482,7 +484,11 @@
         const recent = state.pipeline.finished || {
             count: state.pipeline.recent.length, walkers: state.pipeline.recent,
         };
-        const stages = [...state.pipeline.stages.map(stage => ({
+        // Frozen snapshots may still label and place the initial queue after Building.
+        const pipelineStages = state.pipeline.stages.map(stage => stage.id === "queued"
+            ? {...stage, label: "Queued / awaiting processing"} : stage)
+            .sort((a, b) => Number(b.id === "queued") - Number(a.id === "queued"));
+        const stages = [...pipelineStages.map(stage => ({
             ...stage, walkers: stage.walkers || stage.items,
         })), {id: "recent", label: "Recently finished / rejected", count: recent.count,
             walkers: recent.walkers, items: state.pipeline.recent, recent: true}];
@@ -541,7 +547,8 @@
                 const row = document.createElement("li"), link = document.createElement("a");
                 row.dataset.liveKey = item.key;
                 link.className = "pipeline-mini";
-                link.href = detailed.has(item.key) ? `#pipeline-card-${stage.id}-${item.key}` : prefix + item.history;
+                link.href = detailed.has(item.key) ? `#pipeline-card-${stage.id}-${item.key}`
+                    : item.history ? prefix + item.history : `#pipeline-${stage.id}`;
                 if (detailed.has(item.key)) link.dataset.pipelineLink = "";
                 const name = item.name || (item.proposal ? `Proposal ${item.proposal} (parent B${item.birth})` : `Birth ${item.birth}`);
                 link.title = `${name} · ${item.stage}${item.parentPreview ? " · parent picture" : ""}`;
@@ -653,7 +660,7 @@
             section.append(cards);
             incoming.append(section);
         }
-        for (const stage of state.pipeline.stages) group(stage.id, stage.label, stage.items, stage.count);
+        for (const stage of pipelineStages) group(stage.id, stage.label, stage.items, stage.count);
         group("recent", "Recently finished / rejected", state.pipeline.recent, recent.count, true);
         patch(candidatePipeline, incoming);
         const previews = state.assemblyPreviews;
@@ -671,24 +678,39 @@
         token = state.csrfToken;
         running = state.running;
         canStart = state.canStart !== false;
+        const migration = state.migration;
+        const preparing = migration?.status === "running";
+        const requiresPreparation = Boolean(state.campaign && (preparing || state.updateAvailable));
         runtimeStatus.textContent = state.campaign
-            ? `Experiment ${state.version}. Simulation capacity: ${state.simulationWorkers}. Screening/preflight capacity: ${state.screeningWorkers ?? 1}. Each episode uses a verified, frozen implementation; updates apply between episodes.`
+            ? `Experiment ${state.version}. Simulation capacity: ${state.simulationWorkers}. Screening/preflight capacity: ${state.screeningWorkers ?? 1}. Freeze the runtime before Resume; walker construction runs in the pipeline.`
             : state.pinnedRuntime
             ? "This experiment resumes using its verified, frozen implementation."
             : "This experiment uses its recorded evaluation and search policy.";
         upgrade.hidden = false;
-        upgrade.textContent = state.campaign ? "Update implementation" : "Prepare discovery/cycle upgrade";
-        upgrade.disabled = upgrading || state.running || Boolean(state.campaign &&
+        upgrade.textContent = state.campaign ? preparing ? "Preparation running" : "Prepare runtime" : "Prepare discovery/cycle upgrade";
+        upgrade.disabled = upgrading || preparing || state.running || Boolean(state.campaign &&
             (!state.updateAvailable || (state.rendering.running && (state.rendering.busy ?? true))));
         experimentHistory.hidden = !state.campaign;
         if (state.campaign && !upgrading) {
-            upgradeStatus.textContent = state.updateError ? `Update failed; previous version retained: ${state.updateError}`
-                : state.updateAvailable ? "Update available. It will be applied before the next episode."
-                : "Latest implementation installed. Updates spend no trials.";
+            if (preparing) {
+                const elapsed = Math.max(0, Math.floor((Date.now()-Date.parse(migration.started))/1000));
+                upgradeStatus.textContent = `${migration.stage}${migration.targetVersion ? ` Target ${migration.targetVersion}.` : ""} Elapsed ${Math.floor(elapsed/60)}m ${elapsed%60}s. No trials started.`;
+            } else {
+                upgradeStatus.textContent = migration?.status === "failed" || state.updateError
+                    ? `Preparation failed; previous version retained: ${migration?.error || state.updateError}`
+                    : state.updateAvailable ? "Explicit preparation required before Resume. Preparation starts no episode."
+                    : "Ready to resume the prepared version. No episode starts automatically.";
+            }
+            if (migration?.log) {
+                const link = document.createElement("a");
+                link.href = migration.log;
+                link.textContent = "Preparation log";
+                upgradeStatus.append(" ", link);
+            }
         }
         button.hidden = false;
         button.disabled = starting || state.running || !canStart;
-        button.textContent = state.running ? "Episode running" : !canStart ? "Prepared episode finished"
+        button.textContent = state.running ? "Episode running" : requiresPreparation ? preparing ? "Resume (preparation running)" : "Resume (preparation required)" : !canStart ? "Prepared episode finished"
             : state.remaining > 0 ? `Resume episode (${state.remaining} trials remaining)`
             : state.finiteQueue ? `Run prepared episode (${state.nextEpisodeTrials} trial${state.nextEpisodeTrials === 1 ? "" : "s"})`
             : `Run next episode (${state.nextEpisodeTrials} trial${state.nextEpisodeTrials === 1 ? "" : "s"})`;
@@ -704,7 +726,7 @@
         if (state.log) log.href = state.log;
         const rendering = state.rendering;
         renderStart.hidden = renderStop.hidden = false;
-        renderStart.disabled = renderingAction || rendering.running || !rendering.available;
+        renderStart.disabled = preparing || renderingAction || rendering.running || !rendering.available;
         renderStop.disabled = renderingAction || !rendering.running || rendering.status === "stopping";
         renderStatus.textContent = `${rendering.status === "stopping" ? "Stopping" : rendering.running
             ? rendering.current === null ? "Watching for saved trials" : `Rendering trial ${rendering.current}`
@@ -744,11 +766,13 @@
         }
         updateNavigation();
         const forest = document.getElementById("proposal-forest");
-        if (forest) {
+        if (forest && (state.revision !== forestRevision || performance.now() - forestUpdatedAt >= 10000)) {
             const snapshot = await request("/api/forest");
             const incoming = new DOMParser().parseFromString(snapshot.html, "text/html").getElementById("proposal-forest");
             if (!incoming) throw new Error("Proposal forest update has no content region.");
             patch(forest, incoming);
+            forestRevision = state.revision;
+            forestUpdatedAt = performance.now();
         }
     }
 
@@ -803,6 +827,11 @@
         try {
             const prepared = await request("/api/upgrade", {method: "POST",
                 headers: {"Content-Type": "application/json"}, body: JSON.stringify({csrfToken: token})});
+            if (prepared.preparing) {
+                upgrading = false;
+                await update();
+                return;
+            }
             if (prepared.version) {
                 upgradeStatus.textContent = prepared.updated ? `Updated to ${prepared.version}. No trials started.` : "Already up to date.";
                 await update();
@@ -818,20 +847,20 @@
             upgradeStatus.textContent = `Upgrade failed: ${failure.message}`;
         } finally {
             upgrading = false;
-            upgrade.disabled = running;
+            upgrade.disabled = true;
         }
     });
 
     async function poll() {
         try {
-            await update();
+            if (!document.hidden) await update();
         } catch (failure) {
             error.textContent = `Live update failed: ${failure.message}. Retrying; this page will not reload.`;
             button.disabled = true;
             renderStart.disabled = renderStop.disabled = true;
             upgrade.disabled = true;
         }
-        setTimeout(poll, 2000);
+        setTimeout(poll, document.hidden ? 10000 : 2000);
     }
     updateNavigation();
     poll();

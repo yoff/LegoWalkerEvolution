@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 import re
 import threading
-from http.server import ThreadingHTTPServer
 from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -97,6 +96,175 @@ def test_upgrade_status_does_not_start_previews_before_activation(setup, monkeyp
     assert setup.launched == []
 
 
+def test_resume_requires_explicit_preparation_and_never_migrates(setup, monkeypatch):
+    campaign = setup.create()
+    with pytest.raises(AdapterError, match="Explicitly prepare"):
+        campaign.start()
+    assert setup.launched == [] and len(campaign.history()["versions"]) == 1
+    campaign.ensure_latest()
+    monkeypatch.setattr(campaign, "ensure_latest", lambda: pytest.fail("Resume must not prepare"))
+    campaign.start()
+    assert len(setup.launched) == 1
+
+
+def test_background_migration_keeps_status_responsive_blocks_resume_and_shares_no_authorization(setup):
+    campaign = setup.create()
+    entered, release = threading.Event(), threading.Event()
+    original = campaign.build
+
+    def blocked(*args):
+        entered.set()
+        assert release.wait(10)
+        return original(*args)
+
+    campaign.build = blocked
+    response = campaign.upgrade()
+    try:
+        assert response["preparing"] and entered.wait(5)
+        with dashboard.DashboardServer(("127.0.0.1", 0), dashboard.DashboardHandler) as server:
+            server.controller = campaign
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with urlopen(f"http://127.0.0.1:{server.server_port}/api/status", timeout=2) as response:
+                    state = json.load(response)
+                assert state["migration"]["status"] == "running"
+                assert "queuing immutable motion inputs" in state["migration"]["stage"]
+                assert not state["canStart"] and state["remaining"] == 2 and state["version"] == "v0001"
+                with urlopen(f"http://127.0.0.1:{server.server_port}/migration.log", timeout=2) as response:
+                    assert b"no trials authorized" in response.read()
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
+        with pytest.raises(AdapterError, match="Preparation is running"):
+            campaign.start()
+        with pytest.raises(AdapterError, match="already running"):
+            campaign.upgrade()
+    finally:
+        release.set()
+        campaign.preparation_thread.join(timeout=10)
+    assert not campaign.preparation_thread.is_alive()
+    state = campaign.status()
+    assert state["migration"]["status"] == "ready" and state["canStart"]
+    assert (state["used"], state["budget"], state["remaining"]) == (1, 3, 2)
+    assert setup.launched == []
+
+
+def test_failed_background_migration_retains_version_and_can_be_explicitly_retried(setup):
+    campaign = setup.create()
+    original = campaign.build
+
+    def failing(*args):
+        raise AdapterError("Bounded construction timed out")
+
+    campaign.build = failing
+    campaign.upgrade()
+    campaign.preparation_thread.join(timeout=10)
+    state = campaign.status()
+    assert state["version"] == "v0001" and state["migration"]["status"] == "failed"
+    assert "timed out" in state["migration"]["error"] and not state["canStart"]
+    assert state["remaining"] == 2 and setup.launched == []
+    assert (campaign.root / "versions/v0002/upgrade.json").exists()
+    campaign.build = original
+    campaign.upgrade()
+    campaign.preparation_thread.join(timeout=10)
+    assert campaign.status()["migration"]["status"] == "ready"
+    assert campaign.status()["version"] == "v0003" and setup.launched == []
+
+
+def test_restart_marks_preparation_interrupted_without_retrying_or_launching(setup):
+    campaign = setup.create()
+    campaign.state["migration"] = {"status": "running", "started": "test", "stage": "Rebuilding", "error": None}
+    campaign._save()
+    restarted = setup.create()
+    assert restarted.status()["migration"]["status"] == "failed"
+    assert "interrupted" in restarted.status()["migration"]["error"]
+    assert restarted.preparation_thread is None
+    assert len(restarted.history()["versions"]) == 1 and restarted.status()["remaining"] == 2
+    assert setup.launched == []
+
+
+def test_unexpected_preparation_exception_does_not_leave_operation_running(setup, monkeypatch):
+    campaign = setup.create()
+    exceptions = []
+    monkeypatch.setattr(threading, "excepthook", exceptions.append)
+
+    def failing(*args):
+        raise RuntimeError("Unexpected builder defect")
+
+    campaign.build = failing
+    campaign.upgrade()
+    campaign.preparation_thread.join(timeout=10)
+    state = campaign.status()
+    assert state["migration"]["status"] == "failed"
+    assert "Unexpected preparation failure" in state["migration"]["error"]
+    assert exceptions[0].exc_type is RuntimeError
+    assert state["version"] == "v0001" and state["remaining"] == 2 and setup.launched == []
+
+
+def test_source_change_during_preparation_check_cannot_be_marked_ready(setup, monkeypatch):
+    campaign = setup.create()
+    changed = False
+    original = campaign.describe
+
+    def describe(seeds):
+        nonlocal changed
+        selected = original(seeds)
+        changed = True
+        return selected
+
+    monkeypatch.setattr(campaign, "_stamp", lambda *args: ("after" if changed else "before",))
+    campaign.describe = describe
+    with pytest.raises(AdapterError, match="changed while checking"):
+        campaign.ensure_latest()
+    assert campaign.status()["version"] == "v0001" and not campaign.status()["canStart"]
+    assert setup.launched == [] and campaign.status()["remaining"] == 2
+
+
+def test_implementation_change_invalidates_resume_readiness(setup, monkeypatch):
+    campaign = setup.create()
+    campaign.ensure_latest()
+    assert campaign.status()["canStart"]
+    monkeypatch.setattr(campaign, "_stamp", lambda *args: ("changed-source",))
+    assert not campaign.status()["canStart"]
+    with pytest.raises(AdapterError, match="Explicitly prepare"):
+        campaign.start()
+    assert setup.launched == []
+
+
+def test_dashboard_startup_never_refreshes_or_migrates_existing_campaign(setup, monkeypatch):
+    campaign = setup.create()
+    monkeypatch.setattr(dashboard, "protocol_definition", lambda *args: setup.base)
+    monkeypatch.setattr(dashboard, "CampaignController", lambda *args, **kwargs: campaign)
+    monkeypatch.setattr(campaign, "ensure_latest", lambda: pytest.fail("Startup must not migrate"))
+    monkeypatch.setattr("legowalkers_sim.native_episode.native_protocol",
+                        lambda *args, **kwargs: pytest.fail("Startup must use the frozen protocol"))
+    monkeypatch.setattr("legowalkers_sim.native_episode.refresh_seed_exports",
+                        lambda *args, **kwargs: pytest.fail("Startup must not re-export historical inputs"))
+
+    class Server:
+        server_port = 8788
+
+        def __init__(self, *args):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def serve_forever(self):
+            assert self.controller is campaign
+            assert not campaign.status()["canStart"]
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(dashboard, "DashboardServer", Server)
+    assert dashboard.main(["--campaign", str(campaign.root), "--output", str(setup.original),
+                           "--candidate-batch", str(setup.original / "native-input"), "--discover"]) == 0
+    assert setup.launched == [] and campaign.preparation_thread is None
+
+
 def test_updates_and_restarts_preserve_one_identity_and_transfer_allowance_once(setup):
     campaign = setup.create()
     identifier = campaign.status()["campaign"]
@@ -142,17 +310,22 @@ def test_generation_only_update_reuses_measurement_without_simulation(setup):
 
 
 @pytest.mark.parametrize("inherited", [False, True])
-def test_family_conversion_preserves_measurement_founder_and_cross_version_ancestry(setup, tmp_path, inherited):
+def test_deferred_family_conversion_preserves_historical_measurement_and_cross_version_ancestry(setup, tmp_path, monkeypatch, inherited):
     import shutil
     from legowalkers_sim import population
+    from legowalkers_sim import motion_carry
     from legowalkers_sim.upgrades import _origin
+    from test_native_discovery import Proposals
 
     binary = tmp_path / "compiler"
     binary.mkdir()
     for name in ("LegoWalkers.Cli.dll", "LegoWalkers.Core.dll"):
         (binary / name).write_bytes(b"fixture")
 
+    calls = []
+
     def invoke(*args):
+        calls.append(args)
         source = Path(args[args.index("--parent")+1])
         target = Path(args[args.index("--output")+1]) / "candidate-001"
         shutil.copytree(source, target)
@@ -165,21 +338,36 @@ def test_family_conversion_preserves_measurement_founder_and_cross_version_ances
                    {"status": "converted", "families": [], "unmatched": []})
 
     campaign = setup.create()
+    campaign.describe = lambda seeds: native_protocol(copy.deepcopy(setup.target), seeds, discover=True,
+                                                      defer_construction=True)
     if inherited:
         campaign.ensure_latest()
         setup.target["sourceSha256"]["src/LegoWalkers.Core/WalkerEvolution.fs"] = "convert-inherited-parent"
-    campaign.generator = SimpleNamespace(command=["dotnet", str(binary / "LegoWalkers.Cli.dll")], invoke=invoke)
+    campaign.generator = SimpleNamespace(command=["dotnet", str(binary / "LegoWalkers.Cli.dll")], invoke=invoke,
+                                         build_native=Proposals().build_native)
+    monkeypatch.setattr(motion_carry, "_centering", lambda *args: (None, None))
     assert campaign.ensure_latest()["updated"]
     metadata = json.loads((campaign.directory / "upgrade.json").read_text())
-    assert metadata["parents"][0]["targetDesign"] == "f"*64
+    assert "targetDesign" not in metadata["parents"][0] and calls == []
     archive = Archive(campaign.directory)
     try:
         assert archive.counts() == {}
-        assert archive.best()["design"] == "f"*64 and archive.best()["reused"] == 1
+        assert archive.best()["design"] == setup.manifest["motion"]["genotypeId"] and archive.best()["reused"] == 1
         birth = archive.best()["birth"]
         assert _origin(campaign.directory, birth) == (str(setup.original), 1)
         assert population.family_map(archive)[birth] == birth
         assert len(population.members(archive)) == 1
+        pending = archive.db.execute(
+            "SELECT c.*,b.design FROM native_candidates c JOIN births b ON b.id=c.birth WHERE c.birth=?",
+            (birth,)).fetchone()
+        motion_carry.ensure_pending(archive, pending, campaign.generator, tmp_path)
+        assert len(calls) == 1
+        child = archive.db.execute("SELECT id,parent FROM births WHERE design=?", ("f"*64,)).fetchone()
+        assert child["parent"] == birth
+        assert population.family(archive, child["id"], population.family_map(archive)) == birth
+        assert _origin(campaign.directory, child["id"]) == (str(setup.original), 1)
+        assert archive.db.execute("SELECT count(*) FROM reused_evaluations WHERE birth=?", (child["id"],)).fetchone()[0] == 0
+        assert archive.counts() == {}
     finally:
         archive.db.close()
     forest = campaign_nodes(campaign.state["versions"], campaign.state["active"])
@@ -625,7 +813,7 @@ def test_http_stable_url_history_assets_and_read_only_controls(setup):
         r"\1\2", original_page.read_text(), flags=re.DOTALL).replace("</main>", preview + "</main>")
     original_page.write_text(legacy_page)
     original_index = (setup.original / "index.html").read_bytes()
-    with ThreadingHTTPServer(("127.0.0.1", 0), dashboard.DashboardHandler) as server:
+    with dashboard.DashboardServer(("127.0.0.1", 0), dashboard.DashboardHandler) as server:
         server.controller = campaign
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -686,6 +874,8 @@ def test_http_stable_url_history_assets_and_read_only_controls(setup):
             assert request("/versions/v0001/api/episode", token)[0] == 405
             assert request("/api/episode", {})[0] == 403
             assert request("/api/upgrade", token)[0] == 202
+            campaign.preparation_thread.join(timeout=5)
+            assert not campaign.preparation_thread.is_alive()
             assert campaign.status()["remaining"] == 2 and setup.launched == []
             assert request("/api/episode", token)[0] == 202
             assert campaign.status()["budget"] == 3 and len(setup.launched) == 1

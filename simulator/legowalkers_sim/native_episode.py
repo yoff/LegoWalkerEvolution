@@ -12,6 +12,8 @@ from .evolution import MAX_FEET, MIN_WALKER_FEET, SEARCH_POLICY, render_represen
 from .screening import GATE_ORDER, screen_batch
 from .pipeline import record, screening_observer
 
+DEFERRED_CONSTRUCTION = "queued-motion-inputs-v1"
+
 
 def refresh_seed_exports(source, cache, generator):
     """Re-export historical seeds without changing their design or original files."""
@@ -109,7 +111,7 @@ def refresh_seed_exports(source, cache, generator):
     return target
 
 
-def _queue(source):
+def _queue(source, *, motion_source=False):
     source = source.resolve()
     summary = json.loads((source / "candidates.json").read_text())
     if (not isinstance(summary, dict) or summary.get("schemaVersion") != 1
@@ -137,7 +139,7 @@ def _queue(source):
         if candidate.parent != source or candidate.name in names:
             raise AdapterError("Native candidates must be unique immediate batch subdirectories.")
         names.add(candidate.name)
-        manifest = load_manifest(candidate / "manifest.json")
+        manifest = load_manifest(candidate / "manifest.json", motion_source=motion_source)
         if manifest["grammarVersion"] != "technic-motion-v3":
             raise AdapterError("Native episodes require complete motion-v3 walkers, not leg prototypes.")
         motion = manifest["motion"]
@@ -160,10 +162,10 @@ def _queue(source):
     return summary, files
 
 
-def seed_batches(source):
+def seed_batches(source, *, motion_source=False):
     descriptor = source / "seeds.json"
     if not descriptor.exists():
-        summary, files = _queue(source)
+        summary, files = _queue(source, motion_source=motion_source)
         return [(source, summary, files)]
     from .population import POLICY as population_policy
 
@@ -186,12 +188,13 @@ def seed_batches(source):
         batch = (source / name).resolve()
         if batch.parent != source.resolve():
             raise AdapterError("Seed batches must be immediate pool subdirectories.")
-        summary, files = _queue(batch)
+        summary, files = _queue(batch, motion_source=motion_source)
         batches.append((batch, summary, files))
     return batches
 
 
-def native_protocol(base, source, *, discover=False, reuse_archives=(), simulation_workers=1, screening_workers=1):
+def native_protocol(base, source, *, discover=False, reuse_archives=(), simulation_workers=1, screening_workers=1,
+                    defer_construction=False):
     from .parallel import worker_count
 
     worker_count(simulation_workers)
@@ -199,7 +202,12 @@ def native_protocol(base, source, *, discover=False, reuse_archives=(), simulati
     validate_workers(screening_workers)
     if screening_workers > 1 and not discover:
         raise AdapterError("Parallel screening currently requires native discovery.")
-    batches = seed_batches(source)
+    descriptor = source / "seeds.json"
+    if descriptor.exists() and json.loads(descriptor.read_text()).get("requalificationBatches"):
+        defer_construction = False
+    if defer_construction and not discover:
+        raise AdapterError("Deferred motion construction requires native discovery.")
+    batches = seed_batches(source, motion_source=defer_construction)
     if len(batches) > 1 and not discover:
         raise AdapterError("Multiple seed neighborhoods require --discover.")
     if (source / "seeds.json").exists():
@@ -230,6 +238,8 @@ def native_protocol(base, source, *, discover=False, reuse_archives=(), simulati
             "constructionBudgetScope": "per-prefix-attempt",
             "limit": "Per unfilled full-simulation slot per explicitly started episode; pause when exhausted.",
         }
+    if defer_construction:
+        protocol["deferredConstruction"] = DEFERRED_CONSTRUCTION
     if discover:
         from .discovery import POLICY
         protocol.update(nativeDiscovery=POLICY,
@@ -263,9 +273,9 @@ def _freeze_batch(source, target, files):
         else:
             destination.write_bytes(content)
 
-def _copy_candidate(archive, frozen, entry, files):
+def _copy_candidate(archive, frozen, entry, files, *, motion_source=False):
     candidate = frozen / entry["directory"]
-    manifest = load_manifest(candidate / "manifest.json")
+    manifest = load_manifest(candidate / "manifest.json", motion_source=motion_source)
     design = archive.directory / "designs" / entry["genotypeId"]
     destination = design / "candidate"
     # Construction provenance belongs to the birth, not its potentially shared design.
@@ -279,14 +289,16 @@ def _copy_candidate(archive, frozen, entry, files):
 
 def stage_native(archive, source):
     source = source.resolve()
-    files = native_protocol({}, source, discover=bool(archive.protocol().get("nativeDiscovery")))["candidateBatch"]
+    deferred = archive.protocol().get("deferredConstruction") == DEFERRED_CONSTRUCTION
+    files = native_protocol({}, source, discover=bool(archive.protocol().get("nativeDiscovery")),
+                            defer_construction=deferred)["candidateBatch"]
     if archive.protocol().get("candidateBatch") != files:
         raise AdapterError("Native batch differs from the archive's immutable episode protocol.")
     frozen = archive.directory / "native-input"
     _freeze_batch(source, frozen, files)
-    for batch, summary, fingerprints in seed_batches(frozen):
+    for batch, summary, fingerprints in seed_batches(frozen, motion_source=deferred):
         for entry in summary["generated"]:
-            manifest, _ = _copy_candidate(archive, batch, entry, fingerprints)
+            manifest, _ = _copy_candidate(archive, batch, entry, fingerprints, motion_source=deferred)
             if not archive.db.execute("SELECT 1 FROM designs WHERE id=?", (entry["genotypeId"],)).fetchone():
                 native = ({"assembly": entry["assemblyId"], "batch": str(batch.relative_to(archive.directory)),
                            "directory": entry["directory"], "files": fingerprints}

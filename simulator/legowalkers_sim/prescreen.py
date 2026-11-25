@@ -7,6 +7,8 @@ import json
 import multiprocessing
 from multiprocessing.connection import Connection, wait
 import os
+import signal
+import sqlite3
 from pathlib import Path
 import sys
 import time
@@ -56,14 +58,18 @@ def screen_candidate(batch, output, design, manifest, library, options, stage):
     return {"status": "ready", "checks": checks, "checked": checked, "layout": layout}
 
 
-def _run(evaluator, arguments, sender, log):
+def _run(evaluator, arguments, sender, log, interruptible=False):
     with Path(log).open("w") as stream, contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
+        if interruptible:
+            def stop(signum, frame):
+                raise KeyboardInterrupt("Admission canceled; partial output is retained.")
+            signal.signal(signal.SIGTERM, stop)
         started = time.monotonic()
         _progress(f"Screening worker {os.getpid()} started. This worker reserves no walking trials.")
 
-        def stage(name):
-            _progress(f"Stage: {name}.")
-            sender.send({"stage": name})
+        def stage(name, detail=""):
+            _progress(f"Stage: {name}. {detail}")
+            sender.send({"stage": name, "detail": detail})
 
         try:
             result = evaluator(*arguments, stage)
@@ -94,19 +100,45 @@ class Job:
     log: Path
 
 
+@dataclass
+class AdmissionJob:
+    task: dict
+    startup: int
+    process: multiprocessing.Process
+    receiver: Connection
+    log: Path
+
+
+@dataclass
+class ConstructionJob:
+    birth: int
+    task: dict
+    process: multiprocessing.Process
+    receiver: Connection
+    log: Path
+
+
 class ScreeningPool:
-    def __init__(self, archive, workers, library, options, evaluator=screen_candidate):
+    def __init__(self, archive, workers, library, options, evaluator=screen_candidate, admission_evaluator=None,
+                 construction_evaluator=None):
         self.archive, self.library, self.options = archive, library, options
         self.workers, self.evaluator = validate_workers(workers), evaluator
+        self.admission_evaluator = admission_evaluator
+        self.construction_evaluator = construction_evaluator
         self.context = multiprocessing.get_context("spawn")
         self.jobs = []
+        self.constructed = []
         self.failures = 0
-        for row in archive.db.execute("SELECT birth,pid FROM screening_workers WHERE status='running'").fetchall():
+        for row in archive.db.execute("SELECT birth,pid,log FROM screening_workers WHERE status='running'").fetchall():
             try:
                 os.kill(row["pid"], 0)
             except ProcessLookupError:
                 with archive.db:
                     archive.db.execute("UPDATE screening_workers SET status='interrupted' WHERE birth=?", (row["birth"],))
+                    if row["log"].startswith("construction-workers/"):
+                        archive.db.execute("""UPDATE births SET status='construction-interrupted',
+                            error='Previous construction worker exited; partial work is retained.' WHERE id=?""",
+                            (row["birth"],))
                 record(archive, row["birth"], "paused", "Previous screening worker exited; no simulation trial was spent.")
             else:
                 raise AdapterError(f"Screening process {row['pid']} is still running; wait before resuming.")
@@ -117,14 +149,19 @@ class ScreeningPool:
 
     @property
     def births(self):
-        return {job.birth for job in self.jobs}
+        return {job.birth for job in self.jobs if isinstance(job, (Job, ConstructionJob))}
+
+    @property
+    def admitting(self):
+        return any(isinstance(job, AdmissionJob) for job in self.jobs)
 
     def __enter__(self):
         return self
 
     def __exit__(self, kind, error, trace):
         if self.jobs:
-            self.cancel("Screening dispatcher stopped; no simulation trial was reserved.")
+            self.cancel(str(error) if error is not None else
+                        "Screening dispatcher stopped; no simulation trial was reserved.")
 
     def submit(self, pending, used, maximum):
         from .discovery import DiscoveryLimit
@@ -173,6 +210,91 @@ class ScreeningPool:
                 receiver.close()
                 process.close()
 
+    def submit_admission(self, task, startup, generator, evaluator=None):
+        from .pipeline import update_startup, startup_detail
+        from .user_pool import prepare_admission
+
+        if self.full:
+            raise AdapterError("Screening pool is full.")
+        identifier = task["entry"]["id"]
+        if any(isinstance(job, AdmissionJob) and job.task["entry"]["id"] == identifier for job in self.jobs):
+            raise AdapterError("Contribution already has an active admission worker.")
+        log = self.archive.directory / "admission-workers" / f"{startup:06d}-{identifier}.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        receiver, sender = self.context.Pipe(duplex=False)
+        arguments = (task, self.archive.directory, generator, self.library, self.options.payload_profile)
+        process = self.context.Process(target=_run,
+                                       args=(evaluator or self.admission_evaluator or prepare_admission, arguments, sender, log, True), daemon=True)
+        registered = False
+        started = False
+        try:
+            process.start()
+            update_startup(self.archive, startup, identifier, "running")
+            started = True
+            with self.archive.db:
+                self.archive.db.execute("""
+                    UPDATE pipeline_startup SET pid=?,log=? WHERE batch=? AND task=?
+                """, (process.pid, str(log.relative_to(self.archive.directory)), startup, identifier))
+            startup_detail(self.archive, startup, identifier, "planning: Independent contribution admission worker.")
+            self.jobs.append(AdmissionJob(task, startup, process, receiver, log))
+            registered = True
+        except (AdapterError, OSError, sqlite3.Error, ValueError) as error:
+            if started:
+                from .user_pool import interrupt_admission
+                update_startup(self.archive, startup, identifier, "failed", str(error))
+                interrupt_admission(self.archive, task, str(error))
+            raise
+        finally:
+            sender.close()
+            if not registered:
+                if process.pid is not None:
+                    process.terminate()
+                    process.join(timeout=5)
+                    if process.is_alive():
+                        process.kill()
+                        process.join()
+                receiver.close()
+                process.close()
+
+    def submit_construction(self, task, generator):
+        from .motion_carry import prepare_construction
+
+        birth = task["pending"]["birth"]
+        if self.full or birth in self.births:
+            raise AdapterError("Construction requires an available worker and an inactive candidate.")
+        root = self.archive.directory
+        log = root / "construction-workers" / f"{birth:06d}.log"
+        if log.exists():
+            raise AdapterError("Previous construction output is retained; it cannot be silently repeated.")
+        log.parent.mkdir(parents=True, exist_ok=True)
+        receiver, sender = self.context.Pipe(duplex=False)
+        arguments = (task, root, generator, self.library, self.options.payload_profile)
+        process = self.context.Process(
+            target=_run, args=(self.construction_evaluator or prepare_construction, arguments, sender, log, True),
+            daemon=True)
+        registered = False
+        try:
+            process.start()
+            with self.archive.db:
+                self.archive.db.execute("""INSERT INTO screening_workers(birth,pid,log,status)
+                    VALUES (?,?,?,'running') ON CONFLICT(birth) DO UPDATE SET
+                    pid=excluded.pid,log=excluded.log,status='running'""",
+                    (birth, process.pid, str(log.relative_to(root))))
+            record(self.archive, birth, "planning", "Independent current-construction worker.")
+            self.jobs.append(ConstructionJob(birth, task, process, receiver, log))
+            registered = True
+        finally:
+            sender.close()
+            if not registered:
+                if process.pid is not None:
+                    process.terminate()
+                    process.join(timeout=5)
+                    if process.is_alive():
+                        process.kill()
+                        process.join()
+                receiver.close()
+                process.close()
+
     def reap(self):
         ready = []
         for job in list(self.jobs):
@@ -182,6 +304,20 @@ class ScreeningPool:
                 except (EOFError, OSError):
                     message = {"error": f"Screening worker exited without a result; see {job.log}."}
                 if isinstance(message, dict) and "stage" in message:
+                    if isinstance(job, ConstructionJob):
+                        if (message["stage"] not in ("planning", "building")
+                                or not isinstance(message.get("detail"), str)):
+                            raise AdapterError("Construction worker returned an invalid pipeline stage.")
+                        record(self.archive, job.birth, message["stage"], message["detail"])
+                        continue
+                    if isinstance(job, AdmissionJob):
+                        from .pipeline import startup_detail
+                        if (message["stage"] not in ("planning", "building", "screening")
+                                or not isinstance(message.get("detail"), str)):
+                            raise AdapterError("Admission worker returned an invalid pipeline stage.")
+                        startup_detail(self.archive, job.startup, job.task["entry"]["id"],
+                                       f"{message['stage']}: {message['detail']}")
+                        continue
                     if message["stage"] != "preflight":
                         raise AdapterError("Screening worker returned an invalid pipeline stage.")
                     record(self.archive, job.birth, "screened", "Independent load-only screening passed.")
@@ -196,6 +332,28 @@ class ScreeningPool:
                 if code != 0 or not isinstance(result, dict):
                     error = message.get("error") if isinstance(message, dict) else None
                     self._failed(job, error or f"Screening worker exited with code {code}; see {job.log}.")
+                if isinstance(job, AdmissionJob):
+                    from .pipeline import update_startup
+                    from .user_pool import finish_admission
+                    try:
+                        birth = finish_admission(self.archive, job.task, result)
+                        update_startup(self.archive, job.startup, job.task["entry"]["id"],
+                                       "complete" if result["status"] == "eligible" else "rejected",
+                                       result.get("error") or "Load-only admission passed; walking qualification is separate.", birth)
+                    except (AdapterError, OSError, sqlite3.Error, ValueError) as error:
+                        self._failed(job, str(error))
+                    break
+                if isinstance(job, ConstructionJob):
+                    from .motion_carry import finish_construction
+                    try:
+                        pending = finish_construction(self.archive, job.task, result)
+                    except (AdapterError, OSError, sqlite3.Error, ValueError) as error:
+                        self._failed(job, str(error))
+                    with self.archive.db:
+                        self.archive.db.execute("UPDATE screening_workers SET status='complete' WHERE birth=?", (job.birth,))
+                    if pending is not None:
+                        self.constructed.append(pending)
+                    break
                 if result.get("status") not in ("ready", "screening-rejected", "mass-layout-rejected",
                                                 "evaluation-envelope-rejected"):
                     self._failed(job, "Screening worker returned an invalid outcome.")
@@ -231,8 +389,17 @@ class ScreeningPool:
         return ready
 
     def _failed(self, job, detail):
+        if isinstance(job, AdmissionJob):
+            from .pipeline import update_startup
+            from .user_pool import interrupt_admission
+            update_startup(self.archive, job.startup, job.task["entry"]["id"], "failed", detail)
+            interrupt_admission(self.archive, job.task, detail)
+            raise AdapterError(detail)
         with self.archive.db:
             self.archive.db.execute("UPDATE screening_workers SET status='failed' WHERE birth=?", (job.birth,))
+            if isinstance(job, ConstructionJob):
+                self.archive.db.execute("UPDATE births SET status='construction-interrupted',error=? WHERE id=?",
+                                        (detail, job.birth))
         record(self.archive, job.birth, "paused", detail)
         raise AdapterError(detail)
 
@@ -248,9 +415,21 @@ class ScreeningPool:
             if job.process.is_alive():
                 job.process.terminate()
         for job in jobs:
-            job.process.join()
+            job.process.join(timeout=5)
+            if job.process.is_alive():
+                job.process.kill()
+                job.process.join()
             job.receiver.close()
             job.process.close()
+            if isinstance(job, AdmissionJob):
+                from .pipeline import update_startup
+                from .user_pool import interrupt_admission
+                update_startup(self.archive, job.startup, job.task["entry"]["id"], "interrupted", detail)
+                interrupt_admission(self.archive, job.task, detail)
+                continue
             with self.archive.db:
                 self.archive.db.execute("UPDATE screening_workers SET status='interrupted' WHERE birth=?", (job.birth,))
+                if isinstance(job, ConstructionJob):
+                    self.archive.db.execute("UPDATE births SET status='construction-interrupted',error=? WHERE id=?",
+                                            (detail, job.birth))
             record(self.archive, job.birth, "paused", detail)

@@ -378,7 +378,134 @@ def test_admission_error_is_recorded_and_reraised(environment, monkeypatch):
             user_pool.sync(archive, Path("."), startup_batch=batch)
     items = pipeline.startup_snapshot(archive.db, False)["items"]
     assert items[-1]["status"] == "failed" and items[-1]["detail"] == "Admission worker failed"
-    assert next(item for item in items if item["label"] == "Admitting user contributions")["status"] == "failed"
+    assert next(item for item in items if item["label"] == "Queuing user contributions")["status"] == "failed"
+
+
+@pytest.mark.parametrize("alive", [False, True])
+def test_queued_admission_recovers_dead_worker_without_repeating_partial_work(environment, monkeypatch, alive):
+    store, archive, _, _ = environment
+    root = fork(store, archive)
+    store.contribute(root["node"], "Interrupted contribution", "Test", "", Path("."))
+    startup = pipeline.begin_startup(archive)
+    task, = user_pool.queue(archive, startup_batch=startup)
+    identifier = task["entry"]["id"]
+    pipeline.update_startup(archive, startup, identifier, "running")
+
+    def probe(pid, signal):
+        if not alive:
+            raise ProcessLookupError()
+
+    monkeypatch.setattr(user_pool.os, "kill", probe)
+    if alive:
+        with pytest.raises(AdapterError, match="still running"):
+            user_pool.queue(archive)
+        assert archive.db.execute("SELECT count(*) FROM user_pool_entries").fetchone()[0] == 0
+    else:
+        assert user_pool.queue(archive) == []
+        assert archive.db.execute("SELECT status FROM user_pool_entries").fetchone()[0] == "interrupted"
+        assert archive.db.execute("SELECT status FROM pipeline_startup WHERE batch=? AND task=?",
+                                  (startup, identifier)).fetchone()[0] == "interrupted"
+        assert user_pool.queue(archive) == []
+    assert archive.counts() == {"complete": 1}
+
+
+def eligible_admission_fixture(task, directory, generator, library, payload_profile, stage):
+    import os
+    from legowalkers_sim.native_episode import _freeze_batch, _queue
+
+    source = Path(task["source"])
+    _, files = _queue(source)
+    _freeze_batch(source, directory / "user-contributions" / task["entry"]["id"], files)
+    stage("screening", "Independent admission fixture completed file checks.")
+    if not task["release"].wait(timeout=30):
+        raise AdapterError("Admission fixture release timed out.")
+    return {"status": "eligible", "error": None,
+            "entry": {**task["entry"], "admissionFiles": files, "workerPID": os.getpid()}}
+
+
+def test_spawned_eligible_admission_is_committed_only_by_scheduler(environment):
+    import multiprocessing
+    import os
+    import time
+    from legowalkers_sim.prescreen import ScreeningPool
+    from test_prescreen import options, reap_until
+
+    store, archive, generator, _ = environment
+    root = fork(store, archive)
+    child = store.apply(root["node"], "a"*64, generator)["children"][0]
+    store.contribute(child, "New candidate", "Test", "", Path("."))
+    startup = pipeline.begin_startup(archive)
+    task, = user_pool.queue(archive, startup_batch=startup)
+    release = multiprocessing.get_context("spawn").Event()
+    task["release"] = release
+    before = archive.db.execute("SELECT count(*) FROM births").fetchone()[0]
+    frozen = archive.directory / "user-contributions" / task["entry"]["id"] / "candidates.json"
+    with ScreeningPool(archive, 1, Path("."), options()) as pool:
+        try:
+            pool.submit_admission(task, startup, None, evaluator=eligible_admission_fixture)
+            deadline = time.monotonic() + 30
+            while not frozen.exists():
+                assert time.monotonic() < deadline, "Admission worker did not freeze its candidate."
+                time.sleep(.01)
+            assert archive.db.execute("SELECT count(*) FROM births").fetchone()[0] == before
+            assert archive.db.execute("SELECT count(*) FROM user_pool_entries").fetchone()[0] == 0
+        finally:
+            release.set()
+        assert reap_until(pool) == []
+    entry = archive.db.execute("SELECT * FROM user_pool_entries").fetchone()
+    assert entry["status"] == "eligible" and json.loads(entry["provenance"])["workerPID"] != os.getpid()
+    assert archive.db.execute("SELECT count(*) FROM births").fetchone()[0] == before + 1
+    assert discovery._pending(archive)["birth"] == entry["birth"]
+    assert archive.counts() == {"complete": 1}
+
+
+def test_contribution_timeout_is_visible_and_does_not_block_other_admissions(environment, tmp_path, monkeypatch):
+    import subprocess
+    import shutil
+    from legowalkers_sim import leg_family_migration
+    from test_native_discovery import mock_constructor
+
+    store, archive, generator, _ = environment
+    root = fork(store, archive)
+    child = store.apply(root["node"], "a"*64, generator)["children"][0]
+    store.contribute(root["node"], "Slow walker", "Test", "", Path("."))
+    store.contribute(child, "Next walker", "Test", "", Path("."))
+    selected = dict(archive.protocol())
+    selected["nativeDiscovery"] = discovery.POLICY
+    mock_constructor(tmp_path, monkeypatch, selected)
+    monkeypatch.setattr(archive, "protocol", lambda: selected)
+    def convert(source, cache, *args):
+        target = cache / Path(source).name
+        shutil.copytree(source, target)
+        write_json(target / "leg-family-migration.json", {"designs": []})
+        return target
+
+    monkeypatch.setattr(leg_family_migration, "convert", convert)
+    calls = []
+    original = Proposals.build_native
+
+    def build(self, parent, output, **kwargs):
+        jobs = [item for item in pipeline.startup_snapshot(archive.db, True)["items"] if item["kind"] == "admission"]
+        running = next(item for item in jobs if item["status"] == "running")
+        assert "building: Building attempt 1/" in running["detail"]
+        calls.append(running["label"])
+        if len(calls) == 1:
+            output.mkdir()
+            raise subprocess.TimeoutExpired(["build-walker"], 600)
+        return original(self, parent, output, **kwargs)
+
+    monkeypatch.setattr(Proposals, "build_native", build)
+    before = archive.counts()
+    batch = pipeline.begin_startup(archive)
+    with pipeline.startup_step(archive, batch, "contributions"):
+        user_pool.sync(archive, Path("."), startup_batch=batch, generator=generator)
+    jobs = [item for item in pipeline.startup_snapshot(archive.db, True)["items"] if item["kind"] == "admission"]
+    assert [(item["label"], item["status"]) for item in jobs] == [
+        ("Slow walker", "rejected"), ("Next walker", "complete")]
+    assert "timed out" in jobs[0]["detail"] and archive.counts() == before
+    batch = pipeline.begin_startup(archive)
+    user_pool.sync(archive, Path("."), startup_batch=batch, generator=generator)
+    assert calls == ["Slow walker", "Next walker"] and archive.counts() == before
 
 
 def test_historical_contribution_admission_imports_verified_copy_without_changing_submission(environment, tmp_path, monkeypatch):
@@ -652,9 +779,11 @@ def test_admitted_design_itself_reaches_evaluation_before_offspring(environment,
 
         class Screens:
             jobs = []
+            constructed = []
             births = set()
             full = False
             failures = 0
+            admitting = False
 
             def __init__(self, *args):
                 self.ready = []

@@ -15,10 +15,10 @@ from .pipeline import screening_observer
 from .screening_reports import motion_rejections, rejection_detail, rejections
 from .user_pool import POLICY as USER_POOL_POLICY
 from .leg_family_migration import POLICY as LEG_FAMILY_MIGRATION
-from .motion_carry import POLICY as MOTION_CARRY_POLICY, ensure_pending
+from .motion_carry import POLICY as MOTION_CARRY_POLICY, construction_task, current_pending, ensure_pending, source_candidate
 
 POLICY = {
-    "version": "native-discovery-v38", "mutationVersion": "native-motion-mutations-v23",
+    "version": "native-discovery-v40", "mutationVersion": "native-motion-mutations-v23",
     "motionCarryForward": MOTION_CARRY_POLICY,
     "physicalDeduplication": "assembly-and-controller-v1; polarity and torque limit distinguish trials",
     "polarityFeedback": {"version": "safe-backward-gait-repair-v1", "maximumAttemptsPerBirth": 1,
@@ -284,6 +284,13 @@ def _propose(archive, generator, used, founder=None):
     batch = archive.directory / "proposals" / f"{proposal:06d}"
     try:
         source = archive.directory / "designs" / parent["design"] / "candidate"
+        if archive.protocol().get("deferredConstruction"):
+            native = archive.db.execute(
+                "SELECT c.*,b.design FROM native_candidates c JOIN births b ON b.id=c.birth WHERE c.birth=?",
+                (parent["birth"],)).fetchone()
+            if native is None:
+                raise AdapterError("Selected motion parent has no immutable source binding.")
+            source = source_candidate(archive, native, generator)
         if repair:
             feedback = archive.directory / "construction-feedback" / f"{proposal:06d}.json"
             write_json(feedback, repair["repairHints"])
@@ -365,7 +372,7 @@ def _dispatch(archive, generator, library, options, pool, budget):
     return failures
 
 
-def _dispatch_parallel(archive, generator, library, options, pool, budget, workers):
+def _dispatch_parallel(archive, generator, library, options, pool, budget, workers, *, admissions=(), startup=None):
     from .gallery import publish
     from .prescreen import ScreeningPool
 
@@ -373,46 +380,89 @@ def _dispatch_parallel(archive, generator, library, options, pool, budget, worke
     if type(buffer) is not int or buffer < 1:
         raise AdapterError("Screening buffer capacity must be a positive integer.")
     ready = []
+    constructed = []
+    admissions = list(admissions)
+    prefer_admission = True
     with ScreeningPool(archive, workers, library, options) as screens:
-        while sum(archive.counts().values()) < budget or pool.jobs:
+        while sum(archive.counts().values()) < budget or pool.jobs or screens.admitting:
             pool.reap()
             completed = screens.reap()
+            constructed.extend(screens.constructed)
+            screens.constructed.clear()
             ready.extend(completed)
             if completed:
                 publish(archive)
             used = sum(archive.counts().values())
             if used >= budget:
-                if ready or screens.jobs:
+                if ready or constructed or screens.births:
                     raise AdapterError("Preflight work exceeded the remaining trial allowance.")
                 pool.drain()
+                if screens.admitting:
+                    screens.wait(pool)
+                    continue
                 break
             if pool.exhausted:
                 pool.drain()
+                if screens.admitting:
+                    screens.wait(pool)
+                    continue
                 break
             if ready and not pool.full:
                 birth, checked = ready.pop(0)
                 pool.submit(birth, checked, options)
                 continue
-            planned = screens.births | {birth for birth, _ in ready}
+            if admissions and not screens.full and prefer_admission:
+                screens.submit_admission(admissions.pop(0), startup, generator)
+                prefer_admission = False
+                publish(archive)
+                continue
+            if constructed and not screens.full:
+                try:
+                    screens.submit(constructed[0], pool.generation_step, POLICY["maxReconstructionChecksPerTrial"])
+                except DiscoveryLimit:
+                    if not screens.jobs and not pool.jobs and not ready:
+                        raise
+                    screens.wait(pool)
+                    continue
+                constructed.pop(0)
+                prefer_admission = True
+                publish(archive)
+                continue
+            planned = screens.births | {birth for birth, _ in ready} | {pending["birth"] for pending in constructed}
             capacity = min(buffer, budget - used - pool.pending_gates)
             if len(planned) < capacity and not screens.full:
-                founder = _neighborhood(archive, wait_for_results=bool(planned or pool.jobs), planned=planned)
+                founder = _neighborhood(archive, wait_for_results=bool(planned or pool.jobs or screens.jobs or admissions),
+                                        planned=planned)
                 if founder is not None:
                     pending = _pending(archive, founder, exclude=planned)
                     try:
                         if pending is None:
-                            _propose(archive, generator, pool.generation_step, founder)
+                            if not screens.jobs and not pool.jobs and not admissions:
+                                _propose(archive, generator, pool.generation_step, founder)
+                            else:
+                                founder = None
                         else:
-                            pending = ensure_pending(archive, pending, generator, library, options.payload_profile)
-                            if pending is not None:
-                                screens.submit(pending, pool.generation_step, POLICY["maxReconstructionChecksPerTrial"])
+                            task = construction_task(archive, pending, generator)
+                            if task is not None:
+                                screens.submit_construction(task, generator)
+                            else:
+                                screens.submit(current_pending(archive, pending), pool.generation_step,
+                                               POLICY["maxReconstructionChecksPerTrial"])
+                        if founder is not None:
+                            prefer_admission = True
                     except DiscoveryLimit:
                         if not screens.jobs and not pool.jobs and not ready:
                             raise
                         screens.wait(pool)
                         continue
-                    publish(archive)
-                    continue
+                    if founder is not None:
+                        publish(archive)
+                        continue
+            if admissions and not screens.full:
+                screens.submit_admission(admissions.pop(0), startup, generator)
+                prefer_admission = False
+                publish(archive)
+                continue
             if not screens.jobs and not pool.jobs:
                 raise AdapterError("Discovery has no runnable candidate or active pipeline worker.")
             screens.wait(pool)
@@ -465,13 +515,15 @@ def search_discovery(archive, generator, source, library, options, blender=None,
         stage_native(archive, source)
     with startup_step(archive, startup, "observations"):
         reuse_observations(archive, library)
-    from .user_pool import sync as sync_user_pool
+    from .user_pool import queue as queue_user_pool
+    admissions = []
     with startup_step(archive, startup, "contributions") as progress:
         if requalification_pending(archive):
             progress["detail"] = ("Contribution admissions deferred during the targeted requalification batch; "
                                   "active contributions are preserved for the next ordinary episode.")
         else:
-            sync_user_pool(archive, library, options.payload_profile, startup_batch=startup, generator=generator)
+            admissions = queue_user_pool(archive, startup_batch=startup)
+            progress["detail"] = f"Queued {len(admissions)} contribution admissions for the shared screening pool."
     with startup_step(archive, startup, "recovery"):
         archive.recover()
         with archive.db:
@@ -489,8 +541,9 @@ def search_discovery(archive, generator, source, library, options, blender=None,
             try:
                 if rechecks:
                     failures += _dispatch_requalification(archive, rechecks, library, options, pool, budget)
-                elif screening_workers > 1:
-                    failures += _dispatch_parallel(archive, generator, library, options, pool, budget, screening_workers)
+                elif screening_workers > 1 or admissions:
+                    failures += _dispatch_parallel(archive, generator, library, options, pool, budget, screening_workers,
+                                                   admissions=admissions, startup=startup)
                 else:
                     failures += _dispatch(archive, generator, library, options, pool, budget)
             except (AdapterError, OSError, json.JSONDecodeError):

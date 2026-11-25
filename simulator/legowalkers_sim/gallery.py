@@ -142,9 +142,11 @@ def motion_assets(text):
 
 def document(title, body, *, dashboard=False):
     controls = """<section class="panel" id="live-controls" aria-label="Episode controls">
+<button id="prepare-upgrade" type="button" hidden disabled>Prepare discovery/cycle upgrade</button>
 <button id="start-episode" type="button" hidden disabled>Run next episode (12 trials)</button>
 <p id="worker-status" role="status">Static snapshot. <a href="http://127.0.0.1:8765/">Open live dashboard</a> for in-place updates and episode controls.</p>
 <p id="worker-error" class="bad" role="alert"></p><a id="worker-log" hidden>Worker log</a>
+<p id="upgrade-status" role="status"></p>
 <h3>Candidate pipeline</h3>
 <p class="muted">Initial LEGO assembly previews and solved-motion diagrams are shown together.
 Neither is live physics footage. Preview rendering runs automatically in a separate, single-worker queue.</p>
@@ -157,8 +159,6 @@ Neither is live physics footage. Preview rendering runs automatically in a separ
 <a href="/motif-gallery.html">Construction motif gallery</a> &middot;
 <a href="/motif-opportunities.html">Motif opportunities</a></p>
 <p><a id="experiment-history" href="/history.html" hidden>Updates &amp; history</a></p>
-<button id="prepare-upgrade" type="button" hidden disabled>Prepare discovery/cycle upgrade</button>
-<p id="upgrade-status" role="status"></p>
 <p class="muted">Updates preserve earlier results and never authorize simulations.
 The stable experiment dashboard carries unused allowance forward and keeps earlier versions read-only.</p></section>""" if dashboard else ""
     if dashboard:

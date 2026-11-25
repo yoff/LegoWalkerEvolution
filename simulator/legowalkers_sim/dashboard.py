@@ -3,10 +3,12 @@
 import argparse
 import contextlib
 import json
+import logging
 import os
 import re
 import secrets
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -41,6 +43,7 @@ class EpisodeController:
         self.worker_args = list(map(str, worker_args))
         self.seed = seed
         self.process = None
+        self.pause_thread = None
         self.mutex = threading.Lock()
         self.token = secrets.token_urlsafe(32)
         self.native_candidates = None
@@ -95,6 +98,16 @@ class EpisodeController:
 
     def observe(self, db):
         job = db.execute("SELECT * FROM episodes ORDER BY id DESC LIMIT 1").fetchone()
+        if job is not None and job["status"] in ("stopping", "pause-failed"):
+            if job["status"] == "stopping" and (self.pause_thread is None or not self.pause_thread.is_alive()):
+                try:
+                    self._launch_pause(db, job)
+                except (AdapterError, OSError) as error:
+                    logging.exception("Could not recover episode pause request")
+                    with db:
+                        db.execute("UPDATE episodes SET status='pause-failed',error=? WHERE id=?",
+                                   (f"Could not recover pause: {error}", job["id"]))
+            return True
         if job is None or job["status"] != "running":
             return False
         if self.process is not None:
@@ -169,11 +182,15 @@ class EpisodeController:
             from .parallel import attempt_summary
             cheap = attempt_summary(db)
             return {"running": running, "pid": job["pid"] if running else None,
+                    "pausing": bool(job and job["status"] == "stopping"),
+                    "paused": bool(job and job["status"] == "paused"),
+                    "pauseFailed": bool(job and job["status"] == "pause-failed"),
                     "used": used, "budget": run["budget"], "remaining": run["budget"] - used,
                     "finiteQueue": available is not None,
                     "canStart": not historical and self.resume_error is None and (available is None or available > 0),
                     "nextEpisodeTrials": min(run["budget"]-used or self.episode_trials, available) if available is not None else run["budget"]-used or self.episode_trials,
-                    "error": historical or self.resume_error or (job["error"] if job else None), "log": job["log"] if job else None,
+                    "error": historical or (job["error"] if job and job["status"] == "pause-failed" else None)
+                             or self.resume_error or (job["error"] if job else None), "log": job["log"] if job else None,
                     "cheapGate": cheap,
                     "notice": ("Cheap gate attempt cap reached. Unused full-simulation allowance is retained; "
                                "another explicit episode authorizes up to three new attempts per remaining slot."
@@ -245,6 +262,124 @@ class EpisodeController:
             if self.observe(db):
                 raise AdapterError("Wait for the current episode to finish before preparing an upgrade.")
             return launch(self)
+
+    def pause(self):
+        with self.mutex, contextlib.closing(self.connect()) as db:
+            require_active(self.directory)
+            job = db.execute("SELECT * FROM episodes ORDER BY id DESC LIMIT 1").fetchone()
+            if job is not None and job["status"] == "stopping":
+                raise AdapterError("The episode is already pausing.")
+            if not self.observe(db):
+                raise AdapterError("No episode is running.")
+            job = db.execute("SELECT * FROM episodes ORDER BY id DESC LIMIT 1").fetchone()
+            try:
+                if os.getpgid(job["pid"]) != job["pid"]:
+                    raise AdapterError("Episode PID is not its process-group leader; refusing to signal it.")
+            except ProcessLookupError:
+                if job["status"] != "pause-failed":
+                    self.observe(db)
+                    raise AdapterError("The episode has already stopped.")
+            self._launch_pause(db, job)
+            return {"status": "pausing", "episode": job["id"]}
+
+    def _launch_pause(self, db, job):
+        try:
+            if os.getpgid(job["pid"]) != job["pid"]:
+                raise AdapterError("Episode PID is not its process-group leader; refusing to signal it.")
+        except ProcessLookupError:
+            pass
+        with db:
+            db.execute("UPDATE episodes SET status='stopping',error=NULL WHERE id=?", (job["id"],))
+        self.pause_thread = threading.Thread(target=self._pause_worker, args=(dict(job),),
+                                             name="episode-pause", daemon=True)
+        try:
+            self.pause_thread.start()
+        except RuntimeError as error:
+            with db:
+                db.execute("UPDATE episodes SET status='pause-failed',error=? WHERE id=?",
+                           (f"Could not start pause: {error}", job["id"]))
+            raise AdapterError(f"Could not start pause: {error}") from error
+
+    def _pause_worker(self, job):
+        completed = False
+        try:
+            try:
+                os.killpg(job["pid"], signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            deadline = time.monotonic() + 10
+            escalated = False
+            while True:
+                if self.process is not None:
+                    self.process.poll()
+                try:
+                    os.killpg(job["pid"], 0)
+                except ProcessLookupError:
+                    break
+                except PermissionError:
+                    # macOS can briefly return EPERM while the last group members exit.
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(.1)
+                    continue
+                if time.monotonic() >= deadline:
+                    if escalated:
+                        raise AdapterError("Episode workers have not exited; do not close the computer yet.")
+                    try:
+                        os.killpg(job["pid"], signal.SIGKILL)
+                    except ProcessLookupError:
+                        break
+                    escalated = True
+                    deadline = time.monotonic() + 5
+                time.sleep(.1)
+            with self.mutex, locked(self.directory):
+                archive = Archive(self.directory)
+                try:
+                    archive.recover()
+                    admissions = archive.db.execute("""
+                        SELECT batch,task FROM pipeline_startup WHERE kind='admission' AND status='running'
+                    """).fetchall()
+                    if admissions:
+                        from .user_pool import interrupt_admission
+                        snapshot = archive.db.execute(
+                            "SELECT entries FROM user_pool_snapshots ORDER BY id DESC LIMIT 1").fetchone()
+                        entries = {entry["id"]: entry for entry in json.loads(snapshot["entries"])} if snapshot else {}
+                        for admission in admissions:
+                            if admission["task"] not in entries:
+                                raise AdapterError("Interrupted admission has no immutable input snapshot.")
+                            interrupt_admission(archive, {"entry": entries[admission["task"]]},
+                                                "Episode paused; partial admission output is retained.")
+                    with archive.db:
+                        archive.db.execute("""UPDATE births SET status='construction-interrupted',
+                            error='Episode paused; partial construction output is retained.'
+                            WHERE id IN (SELECT birth FROM screening_workers
+                                WHERE status='running' AND log LIKE 'construction-workers/%')""")
+                        archive.db.execute("UPDATE screening_workers SET status='interrupted' WHERE status='running'")
+                        if archive.db.execute("SELECT 1 FROM sqlite_master WHERE name='native_proposals'").fetchone():
+                            archive.db.execute("""UPDATE native_proposals SET status='interrupted',
+                                error='Episode paused; partial proposal output is retained.' WHERE status='running'""")
+                        archive.db.execute("""UPDATE pipeline_startup SET status='interrupted',
+                            detail='Episode paused; partial output is retained.',completed=? WHERE status='running'""",
+                            (now(),))
+                        archive.db.execute("UPDATE run SET status='paused',updated=? WHERE id=1", (now(),))
+                        archive.db.execute("UPDATE episodes SET status='paused',completed=?,error=NULL WHERE id=?",
+                                           (now(), job["id"]))
+                    publish(archive)
+                    self.process = None
+                    completed = True
+                finally:
+                    archive.db.close()
+        except (AdapterError, OSError, sqlite3.Error, ValueError):
+            logging.exception("Episode pause failed")
+            with self.mutex, contextlib.closing(self.connect()) as db, db:
+                db.execute("UPDATE episodes SET status='pause-failed',error=? WHERE id=?",
+                           (f"Could not finish pausing: {sys.exc_info()[1]}", job["id"]))
+        finally:
+            if not completed:
+                with self.mutex, contextlib.closing(self.connect()) as db, db:
+                    db.execute("""UPDATE episodes SET status='pause-failed',
+                        error=coalesce(error,'Unexpected pause failure; see the dashboard process log.')
+                        WHERE id=? AND status IN ('stopping','paused')""", (job["id"],))
 
 
 class DashboardServer(ThreadingHTTPServer):
@@ -656,6 +791,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         controller = self.server.controller
         actions = {"/api/episode": controller.start,
+                   "/api/episode/pause": controller.pause,
                    "/api/upgrade": self.server.controller.upgrade,
                    "/api/render/start": controller.render_start if isinstance(controller, CampaignController) else controller.renderer.start,
                    "/api/render/stop": controller.render_stop if isinstance(controller, CampaignController) else controller.renderer.stop,

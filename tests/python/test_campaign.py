@@ -96,6 +96,14 @@ def test_upgrade_status_does_not_start_previews_before_activation(setup, monkeyp
     assert setup.launched == []
 
 
+def test_pause_delegates_without_preparation_or_authorization(setup, monkeypatch):
+    campaign = setup.create()
+    before = copy.deepcopy(campaign.state)
+    monkeypatch.setattr(campaign.active, "pause", lambda: {"status": "pausing", "episode": 1})
+    assert campaign.pause() == {"status": "pausing", "episode": 1}
+    assert campaign.state == before and setup.launched == []
+
+
 def test_resume_requires_explicit_preparation_and_never_migrates(setup, monkeypatch):
     campaign = setup.create()
     with pytest.raises(AdapterError, match="Explicitly prepare"):

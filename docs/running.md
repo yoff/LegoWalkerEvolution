@@ -31,6 +31,13 @@ control lock; failed snapshot generation is reported rather than cached.
 An episode exit code of `-15` records a stopped worker, not a dashboard failure:
 interrupted reservations remain spent, and unused authorization is preserved.
 
+Use **Pause episode** before closing the computer. Wait for **Episode paused**:
+the dashboard stops the dispatcher and its owned worker/compiler processes,
+retains partial files, and records interrupted work without refunding reserved
+full trials. Unused authorization is preserved; waking or reopening the dashboard
+never resumes automatically. A persisted pause request is completed after a
+dashboard restart. Animation rendering has its own separate stop control.
+
 There is no hosted simulation service. Every user constructs their own population,
 graph and experiment archive locally. The repository is the software and seed
 source, not the original author's running campaign.

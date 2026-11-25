@@ -75,6 +75,15 @@
     if (!["http:", "https:"].includes(location.protocol) || !document.getElementById("start-episode")) return;
     if (location.pathname.startsWith("/archives/") || location.pathname.startsWith("/versions/")) return;
     const button = document.getElementById("start-episode");
+    const pause = document.getElementById("pause-episode") || document.createElement("button");
+    if (!pause.id) {
+        pause.id = "pause-episode";
+        pause.type = "button";
+        pause.hidden = pause.disabled = true;
+        pause.textContent = "Pause episode";
+        button.after(pause);
+    }
+    pause.title = "Stop episode workers. Reserved trials remain spent; unused allowance is retained. Rendering has separate controls.";
     const status = document.getElementById("worker-status");
     const error = document.getElementById("worker-error");
     const log = document.getElementById("worker-log");
@@ -99,6 +108,7 @@
     let forestUpdatedAt = -Infinity;
     let token = null;
     let starting = false;
+    let pausing = false;
     let deferred = false;
     let running = false;
     let canStart = true;
@@ -714,9 +724,16 @@
             : state.remaining > 0 ? `Resume episode (${state.remaining} trials remaining)`
             : state.finiteQueue ? `Run prepared episode (${state.nextEpisodeTrials} trial${state.nextEpisodeTrials === 1 ? "" : "s"})`
             : `Run next episode (${state.nextEpisodeTrials} trial${state.nextEpisodeTrials === 1 ? "" : "s"})`;
-        status.textContent = state.running
+        pause.hidden = false;
+        pause.disabled = pausing || state.pausing || !state.running;
+        pause.textContent = pausing || state.pausing ? "Pausing episode..." : state.pauseFailed ? "Retry pause" : "Pause episode";
+        status.textContent = state.pausing
+            ? "Pausing episode. Keep the computer awake until all episode workers have stopped."
+            : state.pauseFailed
+            ? "Pause failed. Keep the computer awake and retry; Resume is blocked until shutdown and recovery finish."
+            : state.running
             ? `Episode running in dispatcher ${state.pid}. ${state.activeTrials.length} full simulations${state.cheapGate ? ` and ${state.cheapGate.counts.running ?? 0} cheap prefixes` : ""}; ${state.simulationWorkers} worker slots available. Chat can remain idle or be closed.`
-            : `Worker idle. ${state.used} of ${state.budget} authorized ${state.cheapGate ? "full-simulation" : "trial"} slots spent. No episode starts automatically.`;
+            : `${state.paused ? "Episode paused." : "Worker idle."} ${state.used} of ${state.budget} authorized ${state.cheapGate ? "full-simulation" : "trial"} slots spent. No episode starts automatically.`;
         if (state.notice && !state.running) status.textContent += ` ${state.notice}`;
         renderPipeline(state);
         renderQualified(state.pipeline.qualified);
@@ -786,6 +803,23 @@
             previewError.textContent = failure.message;
         } finally {
             previewRetry.disabled = false;
+        }
+    });
+
+    pause.addEventListener("click", async () => {
+        pausing = true;
+        pause.disabled = true;
+        pause.textContent = "Pausing episode...";
+        try {
+            await request("/api/episode/pause", {method: "POST", headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({csrfToken: token})});
+            await update();
+        } catch (failure) {
+            error.textContent = failure.message;
+            pause.disabled = !running;
+            pause.textContent = "Pause episode";
+        } finally {
+            pausing = false;
         }
     });
 

@@ -113,16 +113,16 @@ const patch = () => {patches++;};
 
 def test_campaign_controls_show_explicit_preparation_progress_failure_and_readiness():
     script = (Path(__file__).parents[2] / "simulator/legowalkers_sim/dashboard.js").read_text()
-    controls = script[script.index("    async function update()"):script.index("        status.textContent = state.running")] + "\n}"
+    controls = script[script.index("    async function update()"):script.index("        status.textContent = state.pausing")] + "\n}"
     code = """
 const assert = require("node:assert/strict");
 const element = () => ({textContent: "", append(...items) {
     this.textContent += items.map(item => typeof item === "string" ? item : item.textContent).join("");
 }});
 const runtimeStatus = element(), upgrade = element(), upgradeStatus = element();
-const experimentHistory = element(), button = element();
+const experimentHistory = element(), button = element(), pause = element();
 const document = {createElement: element};
-let token, running, canStart, upgrading = false, starting = false;
+let token, running, canStart, upgrading = false, starting = false, pausing = false;
 const state = {campaign: "campaign", version: "v0001", running: false, canStart: false,
     updateAvailable: true, remaining: 2, rendering: {running: false}, simulationWorkers: 2,
     migration: {status: "required"}};
@@ -131,9 +131,25 @@ const request = async () => state;
 (async () => {
     await update();
     assert.equal(button.disabled, true);
+    assert.equal(pause.disabled, true);
     assert.match(button.textContent, /Resume.*preparation required/);
     assert.equal(upgrade.disabled, false);
     assert.match(upgradeStatus.textContent, /Explicit preparation required/);
+    state.running = true;
+    await update();
+    assert.equal(pause.disabled, false);
+    assert.equal(pause.textContent, "Pause episode");
+    state.pausing = true;
+    await update();
+    assert.equal(pause.disabled, true);
+    assert.match(pause.textContent, /Pausing/);
+    state.pausing = false;
+    state.pauseFailed = true;
+    await update();
+    assert.equal(pause.disabled, false);
+    assert.equal(pause.textContent, "Retry pause");
+    state.pauseFailed = false;
+    state.running = state.pausing = false;
     state.migration = {status: "running", started: new Date().toISOString(),
         stage: "Rebuilding retained plans.", targetVersion: "v0002", log: "/migration.log"};
     await update();
@@ -637,6 +653,10 @@ def test_http_controls_require_same_origin_and_explicit_token(controller):
             state = json.loads(request("/api/status")[1])
             assert request("/api/episode", {})[0] == 403
             token = {"csrfToken": state["csrfToken"]}
+            assert request("/api/episode/pause", {})[0] == 403
+            assert request("/api/episode/pause", token, Origin="http://foreign.invalid")[0] == 403
+            assert request("/api/episode/pause", token, Origin=url)[0] == 409
+            assert request("/versions/v0001/api/episode/pause", token, Origin=url)[0] == 405
             assert request("/api/render/start", {})[0] == 403
             assert request("/api/render/stop", token, Origin="http://foreign.invalid")[0] == 403
             assert request("/api/render/start", token)[0] == 409  # No Blender configured.
@@ -666,6 +686,156 @@ def test_http_controls_require_same_origin_and_explicit_token(controller):
         finally:
             server.shutdown()
             thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("mode", ["owned", "adopted", "pending-pause", "stubborn"])
+def test_pause_stops_owned_children_preserves_allowance_and_recovers_partial_work(controller, monkeypatch, mode):
+    import signal
+    import time
+    from legowalkers_sim import pipeline, user_pool
+
+    controller.start()
+    monkeypatch.undo()
+    pidfile = controller.directory / "compiler.pid"
+    worker = subprocess.Popen([sys.executable, "-c",
+        "import subprocess,sys,time,signal; from pathlib import Path; "
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN if sys.argv[2]=='stubborn' else signal.SIG_DFL); "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+        "Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)", str(pidfile), mode],
+        start_new_session=True)
+    reaper = threading.Thread(target=worker.wait)
+    reaper.start()
+    try:
+        deadline = time.monotonic() + 10
+        while not pidfile.exists():
+            assert time.monotonic() < deadline
+            time.sleep(.01)
+        child_pid = int(pidfile.read_text())
+        controller.process = None if mode in ("adopted", "pending-pause") else worker
+        with controller.connect() as db:
+            db.execute("UPDATE episodes SET pid=? WHERE id=1", (worker.pid,))
+        archive = Archive(controller.directory)
+        try:
+            birth, _ = archive.record_birth(genome(), None, "founder", [], "generated")
+            trial = archive.reserve(birth)
+            with archive.db:
+                archive.db.execute("INSERT INTO trial_workers VALUES (?,?,?)",
+                                   (trial, child_pid, "evaluations/0001.log"))
+            user_pool.queue(archive)
+            entry = {"id": "a"*32, "files": "{}"}
+            with archive.db:
+                archive.db.execute("INSERT INTO user_pool_snapshots(created,entries) VALUES('test',?)",
+                                   (json.dumps([entry]),))
+                archive.db.execute("INSERT INTO screening_workers VALUES(?,?,?,'running')",
+                                   (birth, child_pid, "construction-workers/000001.log"))
+            batch = pipeline.begin_startup(archive)
+            pipeline.queue_startup(archive, batch, [(entry["id"], "admission", "Partial contribution")])
+            pipeline.update_startup(archive, batch, entry["id"], "running")
+            partial = controller.directory / "partial-attempt.json"
+            partial.write_text("{}")
+            if mode == "pending-pause":
+                with controller.connect() as db:
+                    db.execute("UPDATE episodes SET status='stopping' WHERE id=1")
+                assert controller.status(automatic_previews=False)["pausing"]
+            else:
+                assert controller.pause()["status"] == "pausing"
+            if mode == "stubborn":
+                assert controller.status(automatic_previews=False)["pausing"]
+                with pytest.raises(AdapterError, match="already pausing"):
+                    controller.pause()
+                with pytest.raises(AdapterError, match="already running"):
+                    controller.start()
+            controller.pause_thread.join(timeout=20)
+            assert not controller.pause_thread.is_alive()
+            state = controller.status(automatic_previews=False)
+            assert state["paused"] and not state["running"] and not state["pausing"]
+            assert state["error"] is None
+            assert state["budget"] == 12 and state["used"] == 1 and state["remaining"] == 11
+            assert not state["activeTrials"] and partial.exists()
+            assert archive.db.execute("SELECT status FROM evaluations WHERE id=?", (trial,)).fetchone()[0] == "interrupted"
+            assert archive.db.execute("SELECT status FROM user_pool_entries").fetchone()[0] == "interrupted"
+            assert archive.db.execute("SELECT status FROM screening_workers").fetchone()[0] == "interrupted"
+            with pytest.raises(ProcessLookupError):
+                os.killpg(worker.pid, 0)
+            with pytest.raises(AdapterError, match="No episode"):
+                controller.pause()
+        finally:
+            archive.db.close()
+    finally:
+        try:
+            os.killpg(worker.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        reaper.join(timeout=5)
+
+
+def test_pause_refuses_unowned_group_and_does_not_change_budget(controller, monkeypatch):
+    controller.start()
+    monkeypatch.setattr("legowalkers_sim.dashboard.os.getpgid", lambda pid: pid + 1)
+    with pytest.raises(AdapterError, match="process-group leader"):
+        controller.pause()
+    assert controller.status()["running"] and controller.status()["budget"] == 12
+
+
+def test_restarted_pause_refuses_unowned_group_and_surfaces_failure(controller, monkeypatch):
+    controller.start()
+    controller.process = None
+    with controller.connect() as db:
+        db.execute("UPDATE episodes SET status='stopping' WHERE id=1")
+    monkeypatch.setattr("legowalkers_sim.dashboard.os.getpgid", lambda pid: pid + 1)
+    state = controller.status()
+    assert state["pauseFailed"] and not state["pausing"] and state["running"]
+    assert "process-group leader" in state["error"]
+    assert controller.pause_thread is None
+    with pytest.raises(AdapterError, match="already running"):
+        controller.start()
+
+
+def test_unexpected_pause_failure_is_persisted_and_can_be_retried(controller, monkeypatch):
+    controller.start()
+    with controller.connect() as db:
+        db.execute("UPDATE episodes SET status='stopping' WHERE id=1")
+        job = dict(db.execute("SELECT * FROM episodes WHERE id=1").fetchone())
+
+    def gone(*args):
+        raise ProcessLookupError
+
+    def failed_recovery(archive):
+        raise RuntimeError("Recovery fixture failed")
+
+    recover = Archive.recover
+    monkeypatch.setattr("legowalkers_sim.dashboard.os.killpg", gone)
+    monkeypatch.setattr("legowalkers_sim.dashboard.os.getpgid", lambda pid: pid)
+    monkeypatch.setattr(Archive, "recover", failed_recovery)
+    with pytest.raises(RuntimeError, match="Recovery fixture"):
+        controller._pause_worker(job)
+    state = controller.status()
+    assert state["pauseFailed"] and state["running"]
+    assert "Unexpected pause failure" in state["error"]
+    assert controller.pause_thread is None
+    monkeypatch.setattr(Archive, "recover", recover)
+    assert controller.pause()["status"] == "pausing"
+    controller.pause_thread.join(timeout=10)
+    assert controller.status()["paused"]
+
+
+def test_pause_requires_confirmed_exit_after_transient_group_probe_error(controller, monkeypatch):
+    controller.start()
+    with controller.connect() as db:
+        db.execute("UPDATE episodes SET status='stopping' WHERE id=1")
+        job = dict(db.execute("SELECT * FROM episodes WHERE id=1").fetchone())
+    probes = [PermissionError(), ProcessLookupError()]
+
+    def group_probe(pid, signal):
+        assert pid == job["pid"]
+        if signal == 0:
+            with controller.connect() as db:
+                assert db.execute("SELECT status FROM episodes WHERE id=1").fetchone()[0] == "stopping"
+            raise probes.pop(0)
+
+    monkeypatch.setattr("legowalkers_sim.dashboard.os.killpg", group_probe)
+    controller._pause_worker(job)
+    assert not probes and controller.status()["paused"]
 
 
 def test_real_worker_is_an_independent_process_and_does_not_autorun_more(tmp_path):

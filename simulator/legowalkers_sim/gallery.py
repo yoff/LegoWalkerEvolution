@@ -144,6 +144,7 @@ def document(title, body, *, dashboard=False):
     controls = """<section class="panel" id="live-controls" aria-label="Episode controls">
 <button id="prepare-upgrade" type="button" hidden disabled>Prepare discovery/cycle upgrade</button>
 <button id="start-episode" type="button" hidden disabled>Run next episode (12 trials)</button>
+<button id="pause-episode" type="button" hidden disabled>Pause episode</button>
 <p id="worker-status" role="status">Static snapshot. <a href="http://127.0.0.1:8765/">Open live dashboard</a> for in-place updates and episode controls.</p>
 <p id="worker-error" class="bad" role="alert"></p><a id="worker-log" hidden>Worker log</a>
 <p id="upgrade-status" role="status"></p>

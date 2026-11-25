@@ -477,6 +477,11 @@ class CampaignController:
                 raise AdapterError("Explicitly prepare the current implementation before resuming; Resume never rebuilds or migrates.")
             return {**self.active.start(), "version": self.state["active"]}
 
+    def pause(self):
+        with self.mutex:
+            active = self.active
+        return active.pause()
+
     def requalify(self, trials):
         from .upgrades import _origin
         if type(trials) is not int or not 1 <= trials <= 32:

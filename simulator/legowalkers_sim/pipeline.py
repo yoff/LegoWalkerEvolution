@@ -3,6 +3,8 @@
 from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from dataclasses import dataclass
+from enum import Enum
 import json
 import os
 import sys
@@ -26,6 +28,61 @@ STAGES = {
     "paused": "Paused",
     "user-parent": "User-contributed parent (unmeasured)",
 }
+
+
+class PipelineStage(str, Enum):
+    QUEUED = "queued"
+    PLANNING = "planning"
+    BUILDING = "building"
+    GENERATING = "generating"
+    SCREENING = "screening"
+    SCREENED = "screened"
+    PREFLIGHT = "preflight"
+    READY = "ready"
+    GATING = "gating"
+    SIMULATING = "simulating"
+    RENDERING = "rendering"
+    PAUSED = "paused"
+    USER_PARENT = "user-parent"
+    COMPLETE = "complete"
+    REJECTED = "rejected"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+    DUPLICATE = "duplicate"
+    CARRIED_FORWARD = "motion-carried-forward"
+
+
+@dataclass(frozen=True)
+class PipelineEntry:
+    key: str
+    stage: PipelineStage
+    details: dict
+
+    def __post_init__(self):
+        if not isinstance(self.stage, PipelineStage):
+            raise AdapterError("Pipeline entries require a typed lifecycle stage.")
+
+    @property
+    def item(self):
+        return {**self.details, "key": self.key, "stage": self.stage.value}
+
+    @classmethod
+    def from_item(cls, item):
+        status = item["stage"]
+        aliases = {name: PipelineStage.REJECTED for name in (
+            "generation-rejected", "construction-rejected", "screening-rejected",
+            "compatibility-rejected", "mass-layout-rejected", "evaluation-envelope-rejected",
+            "simulation-rejected")}
+        aliases.update({name: PipelineStage.INTERRUPTED for name in (
+            "construction-interrupted", "simulation-interrupted")})
+        aliases["evaluated"] = PipelineStage.COMPLETE
+        try:
+            stage = aliases[status] if status in aliases else PipelineStage(status)
+        except ValueError as error:
+            raise AdapterError(f"Unknown pipeline lifecycle state: {status}.") from error
+        details = {key: value for key, value in item.items() if key not in ("key", "stage")}
+        return cls(item["key"], stage, {**details, "status": status})
+
 
 def construction_progress(directory, proposal, summary):
     path = directory / "proposals" / f"{proposal:06d}" / "construction-progress.json"
@@ -55,6 +112,33 @@ def construction_progress(directory, proposal, summary):
     return {"tracked": tracked, "events": events[-24:], "operation": summary.get("operation"),
             "counts": summary.get("counts"), "report": str(report.relative_to(directory)) if report.is_file()
             else str(path.relative_to(directory)) if tracked else None}
+
+
+def motion_construction_progress(directory, root, *, running):
+    snapshots = sorted(root.glob("attempt-*/construction-live.json"))
+    if not snapshots:
+        return None
+    path = snapshots[-1]
+    try:
+        live = json.loads(path.read_text())
+        if (live["schemaVersion"] != 1 or live["dynamicTrials"] != 0
+                or not isinstance(live["requestId"], str) or len(live["requestId"]) != 64
+                or not isinstance(live["proof"]["goals"], list) or not isinstance(live["proof"]["steps"], list)
+                or not isinstance(live["search"]["visited"], int)):
+            raise ValueError("Invalid construction snapshot contract.")
+        datetime.fromisoformat(live["updated"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise AdapterError(f"Invalid live construction snapshot: {path}: {error}") from error
+    live["workerRunning"] = running
+    result_path = root / "result.json"
+    attempts = json.loads(result_path.read_text())["attempts"] if result_path.is_file() else []
+    return {
+        "tracked": True, "events": [], "operation": "motion-first-construction", "counts": None,
+        "report": str(result_path.relative_to(directory)) if result_path.is_file() else None,
+        "live": live, "liveReport": str(path.relative_to(directory)),
+        "eventLog": str(path.with_name("construction-events.jsonl").relative_to(directory)),
+        "attempts": attempts,
+    }
 
 
 def ensure_schema(db):
@@ -135,17 +219,19 @@ def startup_step(archive, batch, task):
                        str(error) if error is not None else outcome["detail"], outcome["birth"])
 
 
-def startup_snapshot(db, running, directory=None):
+def startup_snapshot(db, running, directory=None, *, admissions=False):
     if not db.execute("SELECT 1 FROM sqlite_master WHERE name='pipeline_startup'").fetchone():
         return {"tracked": False, "items": [], "counts": {}}
-    rows = db.execute("""
-        SELECT * FROM pipeline_startup WHERE batch=(SELECT max(batch) FROM pipeline_startup) ORDER BY id
-    """).fetchall()
+    condition = """kind='admission' AND id=(SELECT max(id) FROM pipeline_startup other
+        WHERE other.kind='admission' AND other.task=pipeline_startup.task)""" if admissions else \
+        "batch=(SELECT max(batch) FROM pipeline_startup)"
+    rows = db.execute(f"SELECT * FROM pipeline_startup WHERE {condition} ORDER BY id").fetchall()
+    latest_batch = db.execute("SELECT max(batch) FROM pipeline_startup").fetchone()[0]
     current = datetime.now(timezone.utc)
     items, counts = [], Counter()
     for row in rows:
         status = row["status"]
-        if not running and status in ("queued", "running"):
+        if status in ("queued", "running") and (not running or row["batch"] != latest_batch):
             status = "interrupted"
         elapsed = None
         if row["started"] and (row["completed"] or status == "running"):
@@ -164,6 +250,9 @@ def startup_snapshot(db, running, directory=None):
                 directory / "user-admissions" / row["task"], running=running and status == "running")
             birth = db.execute("SELECT design FROM births WHERE id=?", (row["birth"],)).fetchone()
             items[-1]["visuals"] = visuals(directory, birth["design"]) if birth else {}
+            items[-1]["construction"] = motion_construction_progress(
+                directory, directory / "user-motion-builds" / row["task"],
+                running=running and status == "running")
     return {"tracked": bool(rows), "items": items, "counts": dict(counts)}
 
 
@@ -253,10 +342,21 @@ def compact_walker(item, names):
                  else item.get("name") or names.get(item["birth"], f"Birth {item['birth']}")),
         "parentPreview": bool(item.get("parentPreview")),
         "qualification": item.get("qualification"),
+        "contributions": item.get("contributions", []),
     }
 
 
 def snapshot(db, directory, *, running, tracked, limit=8):
+    if db.in_transaction:
+        return _snapshot(db, directory, running=running, tracked=tracked, limit=limit)
+    db.execute("BEGIN")
+    try:
+        return _snapshot(db, directory, running=running, tracked=tracked, limit=limit)
+    finally:
+        db.rollback()
+
+
+def _snapshot(db, directory, *, running, tracked, limit):
     from .gallery import display_result
 
     rejected = rejections(directory)
@@ -283,12 +383,25 @@ def snapshot(db, directory, *, running, tracked, limit=8):
         LEFT JOIN render_jobs r ON r.evaluation=e.id
         WHERE NOT EXISTS(SELECT 1 FROM reused_evaluations o WHERE o.birth=b.id)
         ORDER BY b.id DESC""").fetchall()
-    groups = {stage: [] for stage in STAGES}
-    recent, counts = [], Counter()
+    entries = {}
+
+    def add(item):
+        entry = PipelineEntry.from_item(item)
+        if entry.key in entries:
+            raise AdapterError(f"Duplicate pipeline identity: {entry.key}.")
+        entries[entry.key] = entry
     names = {}
+    contribution_births, contributions = {}, {}
+    contribution_records = {}
     if db.execute("SELECT 1 FROM sqlite_master WHERE name='user_pool_entries'").fetchone():
-        for row in db.execute("SELECT birth,provenance FROM user_pool_entries WHERE birth IS NOT NULL ORDER BY contribution"):
-            names.setdefault(row["birth"], json.loads(row["provenance"])["label"])
+        for row in db.execute("SELECT * FROM user_pool_entries ORDER BY contribution"):
+            contribution_records[row["contribution"]] = dict(row)
+            if row["birth"] is None:
+                continue
+            contribution_births[row["contribution"]] = row["birth"]
+            contributions.setdefault(row["birth"], []).append(row["contribution"])
+            label = json.loads(row["provenance"])["label"]
+            names[row["birth"]] = f"{names[row['birth']]} / {label}" if row["birth"] in names else label
     repairs = {}
     for child in db.execute("""
         SELECT id,parent,status FROM births
@@ -338,7 +451,11 @@ def snapshot(db, directory, *, running, tracked, limit=8):
             "history": f"history/{row['id']:04d}.html",
             "updated": row["measured_at"] or row["stage_at"] or row["created"],
             "qualification": None,
-            "construction": by_design.get((row["parent"], row["design"])),
+            "construction": motion_construction_progress(
+                directory, directory / "motion-builds" / f"{row['id']:06d}",
+                running=running and stage == "building") or by_design.get((row["parent"], row["design"])),
+            "contributions": contributions.get(row["id"], []),
+            "name": names.get(row["id"]),
             "repairs": repairs.get(row["id"], []),
         }
         for folder in (directory / "preflight-isolated" / f"{row['id']:06d}", directory / "preflight"):
@@ -367,11 +484,7 @@ def snapshot(db, directory, *, running, tracked, limit=8):
             if info := rejected.get(row["design"]):
                 item["detail"] = info["detail"]
                 item["report"] = info["report"]
-        counts[stage] += 1
-        if stage in groups:
-            groups[stage].append(item)
-        else:
-            recent.append(item)
+        add(item)
     for row in db.execute("""
         SELECT p.id,p.parent,p.summary,p.status,p.error,p.created,d.id AS design,d.category FROM native_proposals p
         JOIN births b ON b.id=p.parent JOIN designs d ON d.id=b.design
@@ -383,7 +496,6 @@ def snapshot(db, directory, *, running, tracked, limit=8):
         stage = (progress["events"][-1]["stage"] if progress["tracked"] else "generating") if running else "paused"
         if row["status"] != "running":
             stage = row["status"]
-        counts[stage] += 1
         item = {
             "key": f"proposal-{row['id']}", "proposal": row["id"], "birth": row["parent"],
             "design": row["design"], "category": row["category"], "stage": stage,
@@ -394,30 +506,77 @@ def snapshot(db, directory, *, running, tracked, limit=8):
             "previewStatus": None, "previewError": None,
             "construction": progress, "updated": row["created"],
         }
-        if row["status"] == "running":
-            groups[stage].append(item)
-        else:
-            recent.append(item)
+        add(item)
     startup = startup_snapshot(db, running, directory)
-    for admission in startup["items"]:
-        if admission["kind"] != "admission" or admission["status"] != "running":
+    admissions = startup_snapshot(db, running, directory, admissions=True)["items"]
+    owned_births = {entry.item["birth"] for entry in entries.values() if not entry.item.get("proposal")}
+    represented = set()
+    for admission in admissions:
+        task = admission["key"].split("-", 2)[2]
+        represented.add(task)
+        birth = contribution_births.get(task, admission["birth"])
+        if birth in owned_births:
+            owner = next(entry for entry in entries.values()
+                         if entry.item["birth"] == birth and not entry.item.get("proposal"))
+            linked = owner.details.get("contributions", [])
+            if task not in linked:
+                entries[owner.key] = PipelineEntry(owner.key, owner.stage, {
+                    **owner.details, "contributions": [*linked, task],
+                    "name": owner.details.get("name") or admission["label"],
+                })
             continue
-        stage = admission["detail"].partition(":")[0]
-        if stage not in ("planning", "building", "screening"):
-            stage = "planning"
-        counts[stage] += 1
-        groups[stage].append({
-            "key": admission["key"], "birth": None, "history": None, "stage": stage,
+        if admission["status"] == "running":
+            stage = admission["detail"].partition(":")[0]
+            if stage not in ("planning", "building", "screening"):
+                stage = "planning"
+        else:
+            stage = {"queued": "queued", "complete": "user-parent", "interrupted": "paused"}.get(
+                admission["status"], admission["status"])
+        item = {
+            "key": f"contribution-{task}", "birth": birth, "history": admission["history"], "stage": stage,
             "name": admission["label"], "category": "Contribution admission",
             "pid": admission["pid"], "log": admission["log"], "detail": admission["detail"],
             "visuals": admission.get("visuals", {}), "screening": admission.get("screening"),
-            "qualification": None, "trial": None,
+            "qualification": None, "trial": None, "contributions": [task],
+            "construction": admission.get("construction"),
+            "updated": admission["completed"] or admission["started"] or "",
+        }
+        add(item)
+    for contribution, row in contribution_records.items():
+        if contribution in represented or row["birth"] in owned_births:
+            continue
+        birth = row["birth"]
+        design = db.execute("SELECT design FROM births WHERE id=?", (birth,)).fetchone()
+        stage = {"eligible": "user-parent", "interrupted": "paused"}.get(row["status"], row["status"])
+        add({
+            "key": f"contribution-{contribution}", "birth": birth, "stage": stage,
+            "name": json.loads(row["provenance"])["label"], "category": "Contribution admission",
+            "history": f"history/{birth:04d}.html" if birth is not None else None,
+            "detail": row["error"] or "Retained contribution admission.", "updated": "",
+            "visuals": visuals(directory, design["design"]) if design else {}, "contributions": [contribution],
+            "pid": None, "log": None, "trial": None, "qualification": None,
         })
+    groups = {stage: [] for stage in STAGES}
+    recent, counts, owners = [], Counter(), {}
+    for entry in entries.values():
+        counts[entry.stage.value] += 1
+        if entry.stage.value in groups:
+            groups[entry.stage.value].append(entry.item)
+        else:
+            recent.append(entry.item)
+        for contribution in entry.item.get("contributions", []):
+            if contribution in owners:
+                raise AdapterError(f"Contribution {contribution} has multiple pipeline owners.")
+            owners[contribution] = entry.key
+    if set(owners) != set(contribution_records) | represented:
+        raise AdapterError("The pipeline projection omitted a known contribution identity.")
     recent.sort(key=lambda item: item["updated"], reverse=True)
     def order(item):
         return item["birth"] is None, item["birth"] or 0, item["key"]
     return {
         "tracked": tracked,
+        "ownershipVersion": 1,
+        "entries": [entry.item for entry in entries.values()],
         "qualified": recent_qualified(qualified_walkers(db, directory)),
         "startup": startup,
         "stages": [{"id": stage, "label": label, "count": counts[stage],

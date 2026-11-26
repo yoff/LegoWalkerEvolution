@@ -235,6 +235,104 @@
         return value;
     }
 
+    function constructionLive(card, trace, prefix) {
+        const live = trace.live;
+        const section = document.createElement("section");
+        section.dataset.liveKey = "live-construction";
+        const heading = document.createElement("h5");
+        heading.textContent = "Current construction term and constraints";
+        const status = document.createElement("p");
+        const age = Math.max(0, Math.floor((Date.now() - Date.parse(live.updated)) / 1000));
+        status.textContent = `${live.workerRunning ? "Live worker" : "Saved snapshot; worker stopped"} · ${live.status} · snapshot ${age}s ago · ${live.search.visited}/${live.search.maximumStates} states; ${live.search.frontier} queued; ${live.search.pruned} pruned. ${live.detail}`;
+        section.append(heading, status);
+        if (live.inspection) {
+            const inspection = live.inspection;
+            const counters = document.createElement("p");
+            counters.textContent = `${inspection.goal} · ${inspection.rule}. This expansion: ${inspection.checked} placement checks, ${inspection.rejected} rejected, ${inspection.cacheHits} route-cache hits.`;
+            section.append(counters);
+            const colors = {fixed: "#98a8bc", reserved: "#bd93f9", candidate: "#65c8ff", conflict: "#ff7979"};
+            const conflicts = new Set(inspection.conflicts.flatMap(hit => [hit.part, hit.obstacle]));
+            const views = document.createElement("div");
+            views.className = "construction-projections";
+            for (const [axis, label] of [["y", "Side view (X/Y)"], ["z", "Top view (X/Z)"]]) {
+                const figure = document.createElement("figure");
+                const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                const shapes = [
+                    ...inspection.reserved.map(box => ({...box, kind:"reserved"})),
+                    ...inspection.fixed.map(box => ({...box, kind:"fixed"})),
+                    ...inspection.candidate.map(box => ({...box, kind:"candidate"})),
+                ];
+                const values = shapes.flatMap(box => [box.low.x, box.high.x, box.low[axis], box.high[axis]]);
+                if (!values.every(Number.isFinite)) throw new Error("Invalid construction envelope coordinates.");
+                if (shapes.length) {
+                    const left = Math.min(...shapes.map(box => box.low.x)) - 20;
+                    const top = Math.min(...shapes.map(box => box.low[axis])) - 20;
+                    const right = Math.max(...shapes.map(box => box.high.x)) + 20;
+                    const bottom = Math.max(...shapes.map(box => box.high[axis])) + 20;
+                    svg.setAttribute("viewBox", `${left} ${top} ${right-left} ${bottom-top}`);
+                    svg.setAttribute("role", "img");
+                    svg.setAttribute("aria-label", `${label}: sampled gait reservations and candidate stock envelopes`);
+                    for (const box of shapes) {
+                        const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                        const color = conflicts.has(box.part) ? colors.conflict : colors[box.kind];
+                        for (const [name, value] of Object.entries({
+                            x:box.low.x, y:box.low[axis], width:Math.max(0.5, box.high.x-box.low.x),
+                            height:Math.max(0.5, box.high[axis]-box.low[axis]),
+                            fill:color, stroke:color, "fill-opacity":box.kind === "reserved" ? 0.08 : 0.25,
+                            "stroke-width":1, "vector-effect":"non-scaling-stroke",
+                        })) rect.setAttribute(name, String(value));
+                        if (box.kind === "reserved") rect.setAttribute("stroke-dasharray", "4 3");
+                        const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+                        title.textContent = `${box.part} · ${box.body} · ${box.kind}`;
+                        rect.append(title); svg.append(rect);
+                    }
+                    const caption = document.createElement("figcaption");
+                    caption.textContent = label;
+                    figure.append(svg, caption); views.append(figure);
+                }
+            }
+            section.append(views);
+            const legend = document.createElement("p");
+            legend.textContent = "Gray: fixed/selected stock. Purple dashed: sampled swept bounds. Blue: current candidate. Red: reported conflict. Projected bounding boxes can overlap without a 3D collision.";
+            section.append(legend);
+            for (const hit of inspection.conflicts) {
+                const line = document.createElement("p");
+                line.className = "bad";
+                line.textContent = `${hit.part} / ${hit.obstacle} at input ${hit.inputAngleRadians.toFixed(3)} rad (${hit.body}).`;
+                section.append(line);
+            }
+        } else {
+            const note = document.createElement("p");
+            note.textContent = "The solver is expanding this proof; no geometry checkpoint has been emitted for it yet.";
+            section.append(note);
+        }
+        const term = document.createElement("details");
+        term.dataset.liveKey = "construction-term";
+        const title = document.createElement("summary");
+        title.textContent = `Construction term: ${live.proof.steps.length} chosen productions; ${live.openGoals.length} open goals`;
+        term.append(title);
+        const selected = new Map(live.proof.steps.map(step => [step.goal, step]));
+        const goals = document.createElement("ol");
+        for (const goal of live.proof.goals) {
+            const line = document.createElement("li");
+            const step = selected.get(goal.id);
+            line.textContent = `${goal.id} (${goal.kind}): ${step ? `${step.rule} [${step.choice.slice(0,12)}]`
+                : goal.external ? "awaiting external verification" : "open"}${goal.requires.length ? `; requires ${goal.requires.join(", ")}` : ""}`;
+            goals.append(line);
+        }
+        term.append(goals); section.append(term);
+        const authority = document.createElement("p");
+        authority.className = "muted";
+        authority.textContent = live.authority;
+        section.append(authority);
+        for (const [url, label] of [[trace.liveReport, "Latest proof and constraint snapshot (JSON)"],
+            [trace.eventLog, "Recorded search events (JSONL)"]]) {
+            const line = document.createElement("p"), link = document.createElement("a");
+            link.href = prefix + url; link.textContent = label; line.append(link); section.append(line);
+        }
+        card.append(section);
+    }
+
     function pipelineCard(item, prefix, recent = false) {
         const card = document.createElement("li");
         card.className = "active-trial-card";
@@ -309,6 +407,7 @@
             card.append(detail);
         }
         if (item.construction) {
+            if (item.construction.live) constructionLive(card, item.construction, prefix);
             const evidence = document.createElement("details");
             evidence.dataset.liveKey = `construction-${item.key}`;
             const title = document.createElement("summary");
@@ -333,6 +432,11 @@
                 list.append(entry);
             }
             evidence.append(list);
+            for (const attempt of trace.attempts || []) {
+                const line = document.createElement("p");
+                line.textContent = `${attempt.directory}: ${attempt.placement || "recorded placement"}, ${attempt.layers} plate layer(s) · ${attempt.status}${attempt.requestId ? ` · request ${attempt.requestId.slice(0,12)}` : ""}.`;
+                evidence.append(line);
+            }
             if (trace.counts) {
                 const counts = document.createElement("p");
                 counts.textContent = `Builder attempts: ${trace.counts.realizationAttempts}; exported: ${trace.counts.exported}; rejected: ${trace.counts.rejected}; duplicates: ${trace.counts.duplicates}.`;
@@ -491,24 +595,37 @@
         incoming.id = "candidate-pipeline";
         const prefix = state.campaign ? `/versions/${state.version}/` : "";
         const startup = state.pipeline.startup;
-        const recent = state.pipeline.finished || {
+        let recent = state.pipeline.finished || {
             count: state.pipeline.recent.length, walkers: state.pipeline.recent,
         };
         // Frozen snapshots may still label and place the initial queue after Building.
         const pipelineStages = state.pipeline.stages.map(stage => stage.id === "queued"
             ? {...stage, label: "Queued / awaiting processing"} : stage)
+            .map(stage => ({...stage, items: [...stage.items], walkers: [...(stage.walkers || stage.items)]}))
             .sort((a, b) => Number(b.id === "queued") - Number(a.id === "queued"));
+        let recentItems = [...state.pipeline.recent];
+        recent = {...recent, walkers: [...recent.walkers]};
+        if (startup?.tracked && !state.pipeline.ownershipVersion) {
+            const owned = [...pipelineStages.flatMap(stage => stage.walkers), ...recent.walkers];
+            for (const item of startup.items.filter(item => item.kind === "admission")) {
+                if (owned.some(owner => owner.key === item.key || item.birth != null && owner.birth === item.birth && !owner.parentPreview)) continue;
+                const stageId = item.status === "running"
+                    ? ["planning", "building", "screening"].find(stage => item.detail?.startsWith(stage + ":")) || "planning"
+                    : {queued: "queued", complete: "user-parent", interrupted: "paused"}[item.status] || item.status;
+                const card = {...item, name: item.label, stage: stageId, visuals: item.visuals || {},
+                    category: "Contribution admission", qualification: null};
+                const stage = pipelineStages.find(stage => stage.id === stageId);
+                if (stage) {
+                    stage.items.push(card); stage.walkers.push(card); stage.count++;
+                } else {
+                    recentItems.push(card); recent.walkers.push(card); recent.count++;
+                }
+            }
+        }
         const stages = [...pipelineStages.map(stage => ({
             ...stage, walkers: stage.walkers || stage.items,
         })), {id: "recent", label: "Recently finished / rejected", count: recent.count,
-            walkers: recent.walkers, items: state.pipeline.recent, recent: true}];
-        if (startup?.tracked) {
-            const admissions = startup.items.filter(item => item.kind === "admission" && item.status !== "complete");
-            stages.unshift({id: "startup", label: "Contribution admission", count: admissions.length,
-                items: startup.items, walkers: admissions.map(item => ({
-                    ...item, name: item.label, stage: item.status, visuals: item.visuals || {},
-                }))});
-        }
+            walkers: recent.walkers, items: recentItems, recent: true}];
         const summary = document.createElement("nav");
         summary.className = "pipeline-summary";
         summary.setAttribute("aria-label", "Pipeline stage overview");
@@ -671,7 +788,7 @@
             incoming.append(section);
         }
         for (const stage of pipelineStages) group(stage.id, stage.label, stage.items, stage.count);
-        group("recent", "Recently finished / rejected", state.pipeline.recent, recent.count, true);
+        group("recent", "Recently finished / rejected", recentItems, recent.count, true);
         patch(candidatePipeline, incoming);
         const previews = state.assemblyPreviews;
         previewStatus.textContent = !previews.available ? "Assembly previews unavailable: configure a Blender executable."

@@ -43,6 +43,18 @@ type WalkerPackagingAttempt = {
     Gates: GateDecision list
 }
 
+type WalkerConstructionInspection = {
+    Goal: string
+    Rule: string
+    Fixed: WalkerMotionSpace.Envelope list
+    Candidate: WalkerMotionSpace.Envelope list
+    Reserved: WalkerMotionSpace.Envelope list
+    Conflicts: WalkerMotionSpace.Conflict list
+    Checked: int
+    Rejected: int
+    CacheHits: int
+}
+
 module WalkerPackaging =
     let version = "packaging-realization-v19"
     let maximumAttempts = 2
@@ -358,8 +370,11 @@ module WalkerPackaging =
                       (cachedMotion: (ScreenedMotion * ScreenedMotion * Result<MotionFrame list,string>) option)
                       (routeCache: Dictionary<string,(WalkerPlacement list * WalkerPlacement list) list> option)
                       (spaceCache: Dictionary<string,Result<WalkerMotionSpace.Space,GateDecision>> option)
-                      (choose: (string -> string -> string list -> WalkerPlacement list list -> int option) option) =
+                      (choose: (string -> string -> string list -> WalkerPlacement list list -> int option) option)
+                      (inspect: ((unit -> WalkerConstructionInspection) -> unit) option) =
         let mutable pending = None
+        let mutable activeGoal,activeRule = "hardware","reserve-gait-and-place-hardware"
+        let mutable checkedParts,rejectedParts,cacheHits = 0,0,0
         let select key rule bodies alternatives =
             match choose with
             | None -> Some 0
@@ -420,14 +435,34 @@ module WalkerPackaging =
                             WalkerMotionSpace.fixedConflicts parts hardware
                             @ (reservation |> Option.map (fun space -> WalkerMotionSpace.conflicts space owner parts) |> Option.defaultValue [])
                         let fits owner parts =
-                            WalkerMotionSpace.fitsFixed parts hardware
-                            && (reservation |> Option.exists (fun space -> WalkerMotionSpace.fits space owner parts))
+                            let accepted =
+                                WalkerMotionSpace.fitsFixed parts hardware
+                                && (reservation |> Option.exists (fun space -> WalkerMotionSpace.fits space owner parts))
+                            checkedParts <- checkedParts+1
+                            if not accepted then rejectedParts <- rejectedParts+1
+                            inspect |> Option.iter (fun report -> report (fun () ->
+                                let hits =
+                                    if accepted then []
+                                    else
+                                        (WalkerMotionSpace.fixedConflicts parts hardware |> List.truncate 4)
+                                        @ (reservation |> Option.map (fun space -> WalkerMotionSpace.firstConflicts 4 space owner parts)
+                                                       |> Option.defaultValue [])
+                                {Goal=activeGoal;Rule=activeRule
+                                 Fixed=(frameParts @ hardware @ List.ofSeq addedParts @ List.ofSeq addedPins)
+                                       |> List.distinctBy _.Id |> List.map WalkerMotionSpace.partEnvelope
+                                 Candidate=parts |> List.map WalkerMotionSpace.partEnvelope
+                                 Reserved=reservation |> Option.map WalkerMotionSpace.envelopes |> Option.defaultValue []
+                                 Conflicts=hits
+                                 Checked=checkedParts;Rejected=rejectedParts;CacheHits=cacheHits}))
+                            accepted
                         if failure.IsNone && not(fits ground (frameParts @ (request.Targets |> List.map _.Placement))) then
                             let conflicts = conflicts ground (frameParts @ hardware)
                             failure<-Some(error "hardware-enters-reserved-motion-space"
                                 (conflicts |> List.truncate 16 |> List.map (fun c ->
                                     $"{c.Part} / {c.Obstacle} at input {c.InputAngleRadians:G8} rad")))
                         let motor = request.Targets |> List.find (fun t -> t.Placement.Id=request.Source.MotorPart) |> _.Placement
+                        activeGoal <- "motor-mount"
+                        activeRule <- "select-stock-motor-mount-motif"
                         let motorOptions = motorMountOptions motor |> List.filter (fun (_,parts) -> fits ground parts)
                         let motorMounts =
                             if failure.IsSome then []
@@ -491,6 +526,8 @@ module WalkerPackaging =
                                 envelopes |> List.sumBy (WalkerClearance.envelopeOverlapRisk envelope))
                         let addSupport prefix socket plane extras mounts bodies =
                             if failure.IsNone && pending.IsNone then
+                                activeGoal <- prefix
+                                activeRule <- "stock-beam-route-outside-reserved-gait"
                                 let routeFailure () =
                                     let first =
                                         motionSupportRoutes (fun _ -> true) orientation prefix anchors
@@ -524,7 +561,7 @@ module WalkerPackaging =
                                             | None -> choices ()
                                             | Some cache ->
                                                 match cache.TryGetValue cacheKey with
-                                                | true,choices -> choices
+                                                | true,choices -> cacheHits<-cacheHits+1;choices
                                                 | _ ->
                                                     let routes = choices ()
                                                     cache.Add(cacheKey,routes)
@@ -621,6 +658,8 @@ module WalkerPackaging =
                                         else [(minimum+maximum-low-high)/2.0;maximum-high;minimum-low] |> List.distinct
                                     centers |> List.map (fun center ->
                                         {requestedAxle with Id="pivot-"+hinge.Id;Part=part;Position={requestedAxle.Position with Z=center}}))
+                                activeGoal <- "axle-"+body
+                                activeRule <- "stock-axle-wall-coverage"
                                 let axleChoices = spanningAxles |> List.filter (fun axle -> fits body [axle]) |> List.sortBy (fun axle ->
                                         let foreign =
                                             request.Source.Bodies |> List.filter (fun b -> b.Body<>body && b.Body<>ground)
@@ -707,10 +746,13 @@ module WalkerPackaging =
                                                    @ List.ofSeq derivation
                                         Clearance=clearance})
 
-    let internal replay request cachedMotion routeCache spaceCache choose =
-        build 1 request (Some cachedMotion) (Some routeCache) (Some spaceCache) (Some choose)
+    let internal replayObserved inspect request cachedMotion routeCache spaceCache choose =
+        build 1 request (Some cachedMotion) (Some routeCache) (Some spaceCache) (Some choose) inspect
 
-    let private construct orientation request = build orientation request None None None None
+    let internal replay request cachedMotion routeCache spaceCache choose =
+        replayObserved None request cachedMotion routeCache spaceCache choose
+
+    let private construct orientation request = build orientation request None None None None None
 
     let realize request limit =
         if limit<1 || limit>maximumAttempts then invalidArg "limit" "Packaging realization permits one or two support orientations."

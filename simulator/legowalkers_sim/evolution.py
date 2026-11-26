@@ -533,7 +533,7 @@ class Generator:
             raise AdapterError("Native F# proposal returned an inconsistent mutation/rejection summary.")
         return summary
 
-    def build_native(self, parent, output, *, layers=1, placements=None):
+    def build_native(self, parent, output, *, layers=1, placements=None, seen_requests=()):
         from .motion_carry import POLICY
 
         command = ["build-walker", "--parent", str(parent), "--output", str(output),
@@ -542,6 +542,8 @@ class Generator:
                    "--ground-clearance-ldu", str(POLICY["groundClearanceLdu"])]
         if placements is not None:
             command += ["--target-placements", str(placements)]
+        if seen_requests:
+            command += ["--seen-requests", json.dumps(list(seen_requests))]
         result = subprocess.run([*self.command, *command], capture_output=True, text=True, timeout=600)
         summary_file = output / "candidates.json"
         if result.returncode not in (0, 1) or not summary_file.is_file():

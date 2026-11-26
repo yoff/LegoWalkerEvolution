@@ -272,11 +272,27 @@ module WalkerConstructionTheory =
         WalkerPackaging.validate request |> Result.defaultWith (Realization.json >> invalidArg "request")
         ConstructionSearch.create (scope request oracleScope) (goals request) maximumStates maximumFrontier
 
-    let motionTargetOptions (request: WalkerPackagingRequest) (screened: ScreenedMotion) =
+    let motionTargetOptionsObserved inspect (request: WalkerPackagingRequest) (screened: ScreenedMotion) =
         let walking = {request with Drive={request.Drive with Gears=[]}}
         WalkerPackaging.motionSpace walking screened |> Result.map (fun space ->
             let ground = screened.Program.Bodies |> List.find _.Grounded |> _.Id
             let frame,_ = WalkerPackaging.scaffold request
+            let mutable examined,rejected = 0,0
+            let fits (target: WalkerComponentTarget) =
+                let parts = [target.Placement]
+                let accepted = WalkerMotionSpace.fitsFixed parts frame && WalkerMotionSpace.fits space ground parts
+                examined <- examined+1
+                if not accepted then rejected <- rejected+1
+                inspect |> Option.iter (fun report -> report (fun () ->
+                    let hits =
+                        if accepted then []
+                        else WalkerMotionSpace.fixedConflicts parts frame @ WalkerMotionSpace.firstConflicts 4 space ground parts
+                    {Goal="targets";Rule="component-placement-outside-reserved-gait"
+                     Fixed=frame |> List.map WalkerMotionSpace.partEnvelope
+                     Candidate=parts |> List.map WalkerMotionSpace.partEnvelope;Reserved=WalkerMotionSpace.envelopes space
+                     Conflicts=hits
+                     Checked=examined;Rejected=rejected;CacheHits=0}))
+                accepted
             let choices = request.Targets |> List.map (fun target ->
                 let variants =
                     if target.Placement.Id=request.Source.MotorPart then
@@ -291,8 +307,7 @@ module WalkerConstructionTheory =
                         |> List.map (fun delta -> {target with Placement={target.Placement with Position=Vec3.add target.Placement.Position delta}})
                         |> List.sortBy (fun t -> Vec3.distance t.Placement.Position target.Placement.Position,t.Placement.Position)
                 variants |> List.distinct
-                |> List.filter (fun t -> WalkerMotionSpace.fits space ground [t.Placement])
-                |> List.filter (fun t -> WalkerMotionSpace.fitsFixed [t.Placement] frame)
+                |> List.filter fits
                 |> List.truncate (if target.Placement.Id=request.Source.MotorPart then 5 else 12)
                 |> List.indexed)
             let combinations = choices |> List.fold (fun combinations variants ->
@@ -305,7 +320,9 @@ module WalkerConstructionTheory =
             |> List.sortBy (fun (cost,targets) -> cost,Realization.json targets)
             |> List.truncate 32 |> List.map snd)
 
-    let expansion (request: WalkerPackagingRequest) oracleScope =
+    let motionTargetOptions request screened = motionTargetOptionsObserved None request screened
+
+    let expansionObserved inspect (request: WalkerPackagingRequest) oracleScope =
         let expectedScope = scope request oracleScope
         let rootGoals = goals request
         let reference = Realization.screen request.Reference 72 |> Result.defaultWith (Realization.json >> invalidArg "reference")
@@ -384,7 +401,7 @@ module WalkerConstructionTheory =
                             match targetCache.TryGetValue targetKey with
                             | true,options -> options
                             | _ ->
-                                let options = motionTargetOptions {request with Source=source} screened
+                                let options = motionTargetOptionsObserved inspect {request with Source=source} screened
                                 targetCache.Add(targetKey,options)
                                 options
                         let placements = options |> Result.map (List.mapi (fun index targets ->
@@ -429,7 +446,7 @@ module WalkerConstructionTheory =
                                 replayed <- physicalSteps |> List.map _.Goal |> Set.ofList
                                 outcome
                             | _ ->
-                                let outcome = WalkerPackaging.replay {route with Source=source} cachedMotion routeCache spaceCache choose
+                                let outcome = WalkerPackaging.replayObserved inspect {route with Source=source} cachedMotion routeCache spaceCache choose
                                 if unresolved.IsNone then buildCache.Add(physicalKey,outcome)
                                 outcome
                         match unresolved,outcome with
@@ -491,6 +508,12 @@ module WalkerConstructionTheory =
                 memo.Add(cacheKey,result)
                 result
         expand
+
+    let expansion request oracleScope = expansionObserved None request oracleScope
+
+    let advanceObserved observe inspect request oracleScope state =
+        if state.Scope<>scope request oracleScope then invalidArg "checkpoint" "Frozen request/oracle scope changed."
+        ConstructionSearch.nextObserved observe (expansionObserved (Some inspect) request oracleScope) state
 
     let advance request oracleScope state =
         if state.Scope<>scope request oracleScope then invalidArg "checkpoint" "Frozen request/oracle scope changed."

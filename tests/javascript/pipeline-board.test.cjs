@@ -91,21 +91,29 @@ test("overview links to compact stages, thumbnails to scoped details, and empty 
   assert(all(rows[0]).some(node => node.textContent === "No preview"));
 });
 
-test("startup contributions and finished walkers have compact rows linked to their actual stage", () => {
+test("legacy admissions have exactly one board lane and terminal failures remain visible", () => {
   const admission = {key: "admit-L", label: "Outward L", kind: "admission", status: "running",
-    birth: null, history: null};
+    detail: "building: working", birth: null, history: null};
   const completed = {key: "already-admitted", label: "Now queued", kind: "admission", status: "complete", birth: 5};
+  const rejected = {key: "rejected-L", label: "Rejected L", kind: "admission", status: "rejected",
+    birth: null, history: null, detail: "No construction witness"};
   const preparation = {key: "prepare", label: "Preparing immutable candidates", kind: "startup", status: "complete"};
   const finished = make("birth-33", {name: "Birth 33", stage: "rejected", parentPreview: true});
   const {root, context} = harness({
-    startup: {tracked: true, items: [preparation, admission, completed], counts: {complete: 2, running: 1}},
-    stages: [], recent: [finished], finished: {count: 1, walkers: [finished]},
+    startup: {tracked: true, items: [preparation, admission, completed, rejected], counts: {complete: 2, running: 1}},
+    stages: [{id:"building", label:"Building", count:1,
+      items:[{...admission, name:admission.label, stage:"building", visuals:{}}],
+      walkers:[{...admission, name:admission.label, stage:"building", visuals:{}}]},
+      {id:"queued", label:"Queued", count:1, items:[make("birth-5")], walkers:[make("birth-5")]}],
+    recent: [finished], finished: {count: 1, walkers: [finished]},
   });
-  const admissionRows = all(byId(root, "pipeline-board-startup")).filter(node => node.className === "pipeline-mini");
-  assert.equal(admissionRows.length, 1);
-  assert(byId(root, "pipeline-card-startup-already-admitted"));
-  assert.equal(admissionRows[0].href, "#pipeline-card-startup-admit-L");
-  assert(byId(root, "pipeline-card-startup-admit-L"));
+  assert(!byId(root, "pipeline-board-startup"));
+  const board = byId(root, "pipeline-board");
+  const admissionRows = all(board).filter(node => node.className === "pipeline-mini" && node.title.startsWith("Outward L"));
+  assert.equal(admissionRows.filter(row => row.href.includes("admit-L")).length, 1);
+  assert(byId(root, "pipeline-card-building-admit-L"));
+  assert(byId(root, "pipeline-card-recent-rejected-L"));
+  assert.equal(all(board).filter(node => node.className === "pipeline-mini").length, 4);
   const recent = all(byId(root, "pipeline-board-recent")).find(node => node.className === "pipeline-mini");
   assert.equal(recent.href, "#pipeline-card-recent-birth-33");
   assert.match(all(recent).find(node => node.tagName === "IMG").alt, /Parent:/);

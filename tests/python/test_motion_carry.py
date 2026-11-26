@@ -73,6 +73,37 @@ def test_construction_rejection_keeps_motion_source_without_spending_budget(tmp_
         archive.db.close()
 
 
+def test_effective_duplicate_requests_are_carried_between_alternatives(tmp_path, monkeypatch):
+    source, _, archive, _ = setup_discovery(tmp_path, monkeypatch)
+    searched, seen = [], []
+    monkeypatch.setattr(motion_carry, "_centering", lambda *args: (
+        {"payload-battery": {"x": 0, "y": 0, "z": 0}}, None))
+
+    def build(generator, parent, output, *, layers, placements, seen_requests):
+        output.mkdir()
+        request_id = str(layers) * 64
+        duplicate = request_id in seen_requests
+        seen.append(list(seen_requests))
+        if not duplicate:
+            searched.append(request_id)
+        return {"generated": [], "rejected": [], "gates": [],
+                "motionFirst": {"requestId": request_id,
+                                "status": "duplicate-request" if duplicate else "productions-exhausted"}}
+
+    monkeypatch.setattr(Proposals, "build_native", build)
+    try:
+        native_episode.stage_native(archive, source)
+        assert motion_carry.ensure_pending(archive, pending(archive), Proposals(), tmp_path) is None
+        outcome = json.loads((archive.directory / "motion-builds/000001/result.json").read_text())
+        assert len(searched) == 2 and len(outcome["attempts"]) == 4
+        assert [entry["status"] for entry in outcome["attempts"]] == [
+            "construction-rejected", "construction-rejected", "duplicate-request", "duplicate-request"]
+        assert seen == [[], ["1"*64], ["1"*64, "2"*64], ["1"*64, "2"*64]]
+        assert archive.counts() == {}
+    finally:
+        archive.db.close()
+
+
 def test_historical_motion_is_queued_unchanged_then_imported_and_built_with_live_progress(tmp_path, monkeypatch):
     source, _ = native_fixture(tmp_path)
     manifest_path = source / "candidate-0/manifest.json"

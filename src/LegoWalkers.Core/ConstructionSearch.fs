@@ -227,7 +227,7 @@ module ConstructionSearch =
                 "Connectivity and joint-preservation obligations require explicit verified-goal evidence."
         acceptVerified evidenceSha256 (openGoals proof |> List.map _.Id) state
 
-    let next (expand: ConstructionProof -> ConstructionNogood list -> ConstructionExpansion<'witness>) state =
+    let nextObserved observe (expand: ConstructionProof -> ConstructionNogood list -> ConstructionExpansion<'witness>) state =
         require state.Pending.IsNone "Resolve the pending oracle verdict before continuing search."
         require (state.Status<>"oracle-accepted") "Accepted searches are terminal."
         require (state.MaximumStates>=1 && state.MaximumStates<=16384
@@ -271,7 +271,10 @@ module ConstructionSearch =
                 state <- {state with Pruned=state.Pruned+1}
             else
                 state <- {state with SeenNodes=key::state.SeenNodes;Visited=state.Visited+1}
-                match expand proof state.Nogoods with
+                observe state proof None
+                let expansion = expand proof state.Nogoods
+                observe state proof (Some expansion)
+                match expansion with
                 | Blocked gate ->
                     require (gate.Outcome="reject") "A blocked production must return an explicit rejection."
                     state <- {state with Rejections=state.Rejections @ [gate]}
@@ -297,3 +300,5 @@ module ConstructionSearch =
                 else "state-bound-reached"
             state <- {state with Status=status}
         state,result
+
+    let next expand state = nextObserved (fun _ _ _ -> ()) expand state

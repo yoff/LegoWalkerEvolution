@@ -38,6 +38,22 @@ module WalkerPackagingTests =
          ObsoletePartIds=removed;GroundClearance=None;FootConstructionGates=[]}
 
     [<Fact>]
+    let ``route inspection exposes constraint geometry while preserving bounded search`` () =
+        let request = fixture ()
+        let initial = WalkerConstructionTheory.start request "inspection-oracle" 16 16
+        let expected,witness = WalkerConstructionTheory.advance request "inspection-oracle" initial
+        let inspections = ResizeArray<WalkerConstructionInspection>()
+        let actual,observed =
+            WalkerConstructionTheory.advanceObserved (fun _ _ _ -> ())
+                (fun produce -> inspections.Add(produce ())) request "inspection-oracle" initial
+        Assert.Equal(expected,actual)
+        Assert.Equal(witness |> Option.map _.Realized.AssemblyId,observed |> Option.map _.Realized.AssemblyId)
+        Assert.NotEmpty inspections
+        Assert.True(inspections |> Seq.exists (fun entry -> entry.Goal.Contains "support" || entry.Rule.Contains "route"))
+        Assert.True(inspections |> Seq.exists (fun entry -> not entry.Candidate.IsEmpty && not entry.Reserved.IsEmpty))
+        Assert.True(inspections |> Seq.exists (fun entry -> entry.Rejected>0))
+
+    [<Fact>]
     let ``three beam support closes axial reach using legal covered friction pins`` () =
         let anchor,socket = Vec3.create 0 0 100,Vec3.create 120 0 210
         let routes = WalkerPackaging.supportRoutes 1 "extended" [anchor] [] socket socket.Z

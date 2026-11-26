@@ -151,7 +151,111 @@ def test_named_startup_admission_links_to_birth_only_after_admission(archive):
     assert item["elapsedSeconds"] >= 9
     assert item["status"] == "complete"
     assert item["visuals"]["diagram"]
+    assert sum("human" in entry.get("contributions", []) for entry in snapshot(archive)["entries"]) == 1
     assert archive.counts() == {}
+
+
+def test_contribution_has_one_stage_before_during_and_after_birth_handoff(archive):
+    batch = pipeline.begin_startup(archive)
+    pipeline.queue_startup(archive, batch, [("human", "admission", "Outward L")])
+
+    def owner(expected):
+        value = snapshot(archive)
+        items = [item for stage in value["stages"] for item in stage["walkers"]]
+        items += value["finished"]["walkers"]
+        found = [item for item in items if "human" in item["contributions"]]
+        assert len(found) == 1 and found[0]["stage"] == expected
+
+    owner("queued")
+    pipeline.update_startup(archive, batch, "human", "running")
+    for stage in ("planning", "building", "screening"):
+        pipeline.startup_detail(archive, batch, "human", stage + ": working")
+        owner(stage)
+    birth, _ = candidate(archive)
+    archive.db.execute("""CREATE TABLE user_pool_entries(
+        contribution TEXT PRIMARY KEY,birth INTEGER,status TEXT,error TEXT,provenance TEXT)""")
+    archive.db.execute("INSERT INTO user_pool_entries VALUES('human',?,'eligible',NULL,?)",
+                       (birth, json.dumps({"label": "Outward L"})))
+    owner("queued")  # Birth committed before startup completion is collected.
+    pipeline.update_startup(archive, batch, "human", "complete", birth=birth)
+    for stage in ("screening", "screened", "preflight", "ready"):
+        pipeline.record(archive, birth, stage)
+        owner(stage)
+    trial = archive.reserve(birth)
+    owner("simulating")
+    archive.finish(trial, result())
+    owner("complete")
+
+
+@pytest.mark.parametrize("outcome,stage", [("rejected", "rejected"), ("failed", "failed"), ("interrupted", "paused")])
+def test_contribution_without_a_birth_keeps_terminal_outcome_on_board(archive, outcome, stage):
+    batch = pipeline.begin_startup(archive)
+    pipeline.queue_startup(archive, batch, [("human", "admission", "Outward L")])
+    pipeline.update_startup(archive, batch, "human", "running", "building: attempt")
+    pipeline.update_startup(archive, batch, "human", outcome, "Saved construction outcome.")
+    value = snapshot(archive)
+    items = [item for lane in value["stages"] for item in lane["walkers"]] + value["finished"]["walkers"]
+    found = [item for item in items if "human" in item["contributions"]]
+    assert len(found) == 1 and found[0]["stage"] == stage and found[0]["birth"] is None
+    if stage != "paused":
+        assert value["recent"][0]["detail"] == "Saved construction outcome."
+    assert archive.counts() == {}
+
+
+def test_live_construction_snapshot_reaches_contribution_owner_and_is_read_only(archive):
+    from legowalkers_sim.bridge import write_json
+    batch = pipeline.begin_startup(archive)
+    pipeline.queue_startup(archive, batch, [("human", "admission", "Outward L")])
+    pipeline.update_startup(archive, batch, "human", "running", "building: alternatives")
+    path = archive.directory / "user-motion-builds/human/attempt-001/construction-live.json"
+    document = {
+        "schemaVersion": 1, "requestId": "a"*64, "dynamicTrials": 0,
+        "updated": datetime.now(timezone.utc).isoformat(), "proof": {"goals": [], "steps": []},
+        "search": {"visited": 10}, "inspection": None,
+    }
+    write_json(path, document)
+    original = path.read_bytes()
+    item = stages(snapshot(archive))["building"]["items"][0]
+    assert item["construction"]["live"]["workerRunning"]
+    assert item["construction"]["live"]["search"]["visited"] == 10
+    assert item["construction"]["liveReport"] == str(path.relative_to(archive.directory))
+    pipeline.update_startup(archive, batch, "human", "rejected", "No witness")
+    assert not snapshot(archive)["recent"][0]["construction"]["live"]["workerRunning"]
+    assert path.read_bytes() == original and archive.counts() == {}
+    document["dynamicTrials"] = 1
+    write_json(path, document)
+    with pytest.raises(AdapterError, match="Invalid live construction snapshot"):
+        snapshot(archive)
+
+
+def test_unknown_lifecycle_state_is_rejected_instead_of_becoming_an_unowned_item(archive):
+    birth, _ = candidate(archive)
+    archive.db.execute("UPDATE births SET status='unknown-stage' WHERE id=?", (birth,))
+    with pytest.raises(AdapterError, match="Unknown pipeline lifecycle state"):
+        snapshot(archive)
+
+
+def test_carried_motion_source_has_a_terminal_owner_distinct_from_its_new_birth(archive):
+    source, _ = candidate(archive)
+    child, _ = candidate(archive, 1, parent=source, operation="build-carried-motion")
+    archive.db.execute("UPDATE births SET status='motion-carried-forward' WHERE id=?", (source,))
+    value = snapshot(archive)
+    assert value["recent"][0]["birth"] == source
+    assert value["recent"][0]["stage"] == "motion-carried-forward"
+    assert stages(value)["queued"]["walkers"][0]["birth"] == child
+
+
+def test_finished_contributions_remain_owned_when_another_episode_starts(archive):
+    first = pipeline.begin_startup(archive)
+    pipeline.queue_startup(archive, first, [("human", "admission", "Outward L")])
+    pipeline.update_startup(archive, first, "human", "running", "building: work")
+    pipeline.update_startup(archive, first, "human", "rejected", "No bounded witness")
+    pipeline.begin_startup(archive)
+    value = snapshot(archive)
+    assert all(item["kind"] != "admission" for item in value["startup"]["items"])
+    owner, = [item for item in value["entries"] if "human" in item.get("contributions", [])]
+    assert owner["stage"] == "rejected" and owner["detail"] == "No bounded witness"
+    assert owner["key"] == "contribution-human"
 
 
 def test_admission_and_candidate_cards_read_live_screening_checkpoints(archive):
@@ -216,7 +320,7 @@ assert.equal(diagnostics.children[2].children[0].textContent, "Inputs: pass — 
 def test_recent_pipeline_section_is_open_but_requests_collapsed_member_diagnostics():
     import subprocess
     script = Path(pipeline.__file__).with_name("dashboard.js").read_text()
-    function = script[script.index("        function group("):script.index("        for (const stage of state.pipeline.stages) group(")]
+    function = script[script.index("        function group("):script.index("        for (const stage of pipelineStages) group(")]
     harness = """
 const assert = require("node:assert/strict");
 const document = {createElement: tag => ({
@@ -528,6 +632,7 @@ def test_prefix_has_separate_stage_and_only_scientific_rejection_has_a_verdict(a
     assert item["qualification"] == ({"qualified": False, "rejectionReasons": ["forbidden-ground-contact"]}
                                       if outcome == "rejected" else None)
     assert list(archive.db.iterdump()) == before and archive.counts() == {}
+
 
 
 def test_completed_trial_without_result_is_an_explicit_error(archive):

@@ -45,6 +45,11 @@ module WalkerMotionSpace =
         GroundPlan: WalkerGroundPlan option
     }
     type Conflict = { Part: string; Obstacle: string; Body: string; InputAngleRadians: float }
+    type Envelope = { Part: string; Body: string; Low: Vec3; High: Vec3 }
+
+    let envelopes space =
+        space.Obstacles |> List.map (fun obstacle ->
+            {Part=obstacle.Part.Id;Body=obstacle.Body;Low=obstacle.Low;High=obstacle.High})
 
     let private box (center: Vec3) (axes: Vec3 list) (half: float list) =
         let extent = List.zip axes half |> List.fold (fun total (axis,h) ->
@@ -90,6 +95,12 @@ module WalkerMotionSpace =
                 match local with
                 | Some(low,high) -> bounds low high
                 | None -> invalidArg "part" $"No motion-reservation envelope for {part.Id} ({part.Part})."
+
+    let partEnvelope (part: WalkerPlacement) =
+        let boxes = stockBoxes part
+        {Part=part.Id;Body="candidate"
+         Low=boxes |> List.map _.Low |> List.reduce (fun a b -> Vec3.create (min a.X b.X) (min a.Y b.Y) (min a.Z b.Z))
+         High=boxes |> List.map _.High |> List.reduce (fun a b -> Vec3.create (max a.X b.X) (max a.Y b.Y) (max a.Z b.Z))}
 
     let private boundsOverlap (lowA: Vec3) (highA: Vec3) (lowB: Vec3) (highB: Vec3) =
         min highA.X highB.X-max lowA.X lowB.X>toleranceLdu
@@ -274,6 +285,7 @@ module WalkerMotionSpace =
         }
 
     let conflicts space owner parts = intersections space owner parts |> Seq.toList
+    let firstConflicts limit space owner parts = intersections space owner parts |> Seq.truncate limit |> Seq.toList
     let fits space owner parts = intersections space owner parts |> Seq.isEmpty
 
     let private fixedIntersections parts hardware =

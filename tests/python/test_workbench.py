@@ -487,7 +487,7 @@ def test_contribution_timeout_is_visible_and_does_not_block_other_admissions(env
     def build(self, parent, output, **kwargs):
         jobs = [item for item in pipeline.startup_snapshot(archive.db, True)["items"] if item["kind"] == "admission"]
         running = next(item for item in jobs if item["status"] == "running")
-        assert "building: Building attempt 1/" in running["detail"]
+        assert "building: Building alternative 1/" in running["detail"]
         calls.append(running["label"])
         if len(calls) == 1:
             output.mkdir()

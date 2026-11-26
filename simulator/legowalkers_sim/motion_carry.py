@@ -12,13 +12,14 @@ from .mass_layout import mass_layout_gate
 from .payload import load_profile
 
 POLICY = {
-    "version": "motion-first-carry-forward-v1",
+    "version": "motion-first-carry-forward-v2",
     "samples": 96, "groundClearanceLdu": 8,
     "packagingVersion": "packaging-realization-v19",
     "theoryVersion": "walker-construction-theory-v22",
     "maximumBuildAttempts": 4, "plateLayers": [1, 2],
     "preserves": "Reference walking motion and electrical control; old physical stock is realization advice.",
     "placement": "Try estimated CoM centering at fixed leg mounts, then inherited placement preferences; all new routes remain mandatory.",
+    "deduplication": "Effective request identities include the full request and frozen theory/oracle scope; an identical request is never searched twice within an obligation.",
     "inertia": "Estimated diagnostics, not a universal smaller/larger reward.",
     "repairs": "Existing exact-screening feedback, repair depth and proposal/reconstruction limits remain in force.",
     "failure": "Explicit construction rejection; no fallback to simulating the inherited assembly.",
@@ -106,14 +107,18 @@ def rebuild(parent, output, generator, library, payload_profile=None, *, preserv
     if hints is not None:
         write_json(hint_file, hints)
     attempts = []
+    seen_requests = []
     preferences = [hint_file, None] if hints is not None else [None]
     for placements in preferences:
         for layers in POLICY["plateLayers"]:
             folder = output / f"attempt-{len(attempts)+1:03d}"
             if observer is not None:
-                observer("building", f"Building attempt {len(attempts)+1}/{POLICY['maximumBuildAttempts']}, {layers} plate layer(s).")
+                observer("building", f"Building alternative {len(attempts)+1}/{len(preferences)*len(POLICY['plateLayers'])}: "
+                         f"{'estimated CoM-centered' if placements else 'inherited'} placement preferences, {layers} plate layer(s). "
+                         "Identical effective requests are skipped.")
             try:
-                summary = generator.build_native(parent, folder, layers=layers, placements=placements)
+                summary = generator.build_native(parent, folder, layers=layers, placements=placements,
+                                                 seen_requests=seen_requests)
             except subprocess.TimeoutExpired as error:
                 message = "Bounded motion construction timed out; partial output is preserved and inherited hardware is not substituted."
                 attempts.append({"directory": folder.name, "layers": layers,
@@ -127,8 +132,14 @@ def rebuild(parent, output, generator, library, payload_profile=None, *, preserv
                 attempts.append({"directory": folder.name, "layers": layers, "status": "construction-rejected",
                                  "error": str(error)})
                 continue
+            request_id = summary.get("motionFirst", {}).get("requestId")
+            duplicate = summary.get("motionFirst", {}).get("status") == "duplicate-request"
+            if request_id is not None and not duplicate:
+                seen_requests.append(request_id)
             attempts.append({"directory": folder.name, "layers": layers,
-                             "status": "generated" if summary["generated"] else "construction-rejected",
+                             "placement": "estimated-CoM" if placements else "inherited",
+                             "requestId": request_id,
+                             "status": "duplicate-request" if duplicate else "generated" if summary["generated"] else "construction-rejected",
                              "rejected": summary.get("rejected", []), "gates": summary["gates"]})
             if not summary["generated"]:
                 continue

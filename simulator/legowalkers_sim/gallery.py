@@ -89,6 +89,9 @@ button{background:#294d76;color:#e2eaf7;border:1px solid #72bbff;border-radius:8
 .pipeline-visuals figure{margin:0}
 .pipeline-visuals img{aspect-ratio:8/5;max-height:240px;object-fit:contain}
 .pipeline-visuals figcaption{font-size:12px;color:#a0b1c9}
+.construction-projections{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:12px}
+.construction-projections figure{margin:0}
+.construction-projections svg{width:100%;height:260px;background:#101723}
 #dashboard-navigation{position:sticky;top:0;z-index:10;display:flex;gap:8px;overflow-x:auto;
 background:#101723;border:1px solid #48607f;border-radius:10px;padding:10px;align-items:center}
 #dashboard-navigation a{white-space:nowrap;padding:4px 8px}

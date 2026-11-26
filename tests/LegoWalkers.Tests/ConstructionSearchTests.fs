@@ -118,6 +118,18 @@ module ConstructionSearchTests =
         Assert.Equal(1,limited.Discarded)
 
     [<Fact>]
+    let ``observing search exposes live partial terms without changing decisions or accounting`` () =
+        let events = ResizeArray<_>()
+        let observe (state: ConstructionSearchState) proof (outcome: ConstructionExpansion<ConstructionProof> option) =
+            events.Add(state.Visited,proof,outcome.IsSome)
+        let expected,witness = ConstructionSearch.next expansion (fixture ())
+        let actual,observed = ConstructionSearch.nextObserved observe expansion (fixture ())
+        Assert.Equal(expected,actual)
+        Assert.Equal(witness,observed)
+        Assert.True(events |> Seq.exists (fun (_,proof,finished) -> not finished && not((ConstructionSearch.openGoals proof).IsEmpty)))
+        Assert.Equal(expected.Visited*2,events.Count)
+
+    [<Fact>]
     let ``oracle acceptance closes external goals only after local witnesses`` () =
         let pending,proof = ConstructionSearch.next expansion (fixture ())
         Assert.Equal("oracle",(ConstructionSearch.openGoals proof.Value).Head.Id)

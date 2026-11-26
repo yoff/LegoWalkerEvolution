@@ -30,8 +30,10 @@ let usage = """LegoWalkers: constrained Technic mechanism compiler
                [--foot-policy paired-plates|retain] [--foot-layers 1|2]
                [--target-placements JSON] [--ground-clearance-ldu NUMBER]
                [--max-roll-degrees NUMBER] [--max-pitch-degrees NUMBER]
+               [--seen-requests JSON-ARRAY-OF-SCOPED-REQUEST-IDS]
     Ground options also apply to construct-walker without --feedback.
     Defaults: paired plates, 8 LDU non-foot clearance, upright nominal attitude.
+    Writes throttled live proof/envelope snapshots and a recorded search-event stream.
   inner-feet-walker --parent DIR --output DIR [--steps 36..3600]
   foot-plates-walker --parent DIR --output DIR [--layers 1..2] [--steps 36..3600]
   grammar-walker --parent DIR --output DIR --conflicts JSON [--limit 1..32] [--steps 36..3600]
@@ -146,12 +148,81 @@ let buildWalker options =
                     MaximumRollRadians=number "--max-roll-degrees" 0.0*Math.PI/180.0
                     MaximumPitchRadians=number "--max-pitch-degrees" 0.0*Math.PI/180.0}
     let request = {request with GroundClearance=Some ground}
-    trace "planning" "running" 0 "Reserving the complete geared gait before choosing hardware, stock axles and support routes."
-    let initial = WalkerConstructionTheory.start request "motion-first-build-awaiting-exact-admission-v1" 512 64
-    let state,construction = WalkerConstructionTheory.advance request "motion-first-build-awaiting-exact-admission-v1" initial
     let directory = output options
     WalkerBuilder.write directory policy
     File.WriteAllText(Path.Combine(directory,"request.json"),Realization.json request+"\n")
+    let oracleScope = "motion-first-build-awaiting-exact-admission-v1"
+    let initial = WalkerConstructionTheory.start request oracleScope 512 64
+    let requestId = initial.Scope
+    let seenRequests =
+        match Map.tryFind "--seen-requests" options with
+        | None -> []
+        | Some value ->
+            match JsonNode.Parse value with
+            | :? JsonArray as values -> values |> Seq.map (fun v -> v.GetValue<string>()) |> Seq.toList
+            | _ -> invalidArg "--seen-requests" "Expected an array of effective construction request identities."
+    let timer = Diagnostics.Stopwatch.StartNew()
+    let mutable lastSnapshot = -1.0
+    let mutable observedState = initial
+    let mutable observedProof = initial.Frontier.Head
+    let mutable inspection: WalkerConstructionInspection option = None
+    let mutable detail = "Opening the construction proof."
+    let writeSnapshot force =
+        if force || timer.Elapsed.TotalSeconds-lastSnapshot>=0.5 then
+            let stamp = DateTimeOffset.UtcNow.ToString("O")
+            let document = {|
+                schemaVersion=1;requestId=requestId;updated=stamp;elapsedSeconds=timer.Elapsed.TotalSeconds
+                status=observedState.Status;detail=detail;proof=observedProof
+                openGoals=ConstructionSearch.openGoals observedProof;inspection=inspection
+                search={|visited=observedState.Visited;maximumStates=observedState.MaximumStates
+                         frontier=observedState.Frontier.Length;pruned=observedState.Pruned;discarded=observedState.Discarded|}
+                authority="Live partial construction and sampled stock envelopes; not a qualified assembly or physics."
+                dynamicTrials=0
+            |}
+            let path = Path.Combine(directory,"construction-live.json")
+            File.WriteAllText(path+".tmp",Realization.json document+"\n")
+            File.Move(path+".tmp",path,true)
+            let event = {|
+                updated=stamp;elapsedSeconds=timer.Elapsed.TotalSeconds;status=observedState.Status;detail=detail
+                node=ConstructionSearch.nodeId observedProof;visited=observedState.Visited
+                goal=inspection |> Option.map _.Goal
+                ``checked``=inspection |> Option.map _.Checked;rejected=inspection |> Option.map _.Rejected
+            |}
+            File.AppendAllText(Path.Combine(directory,"construction-events.jsonl"),Realization.json event |> fun text -> text.Replace("\n","").Replace("\r","")+"\n")
+            lastSnapshot <- timer.Elapsed.TotalSeconds
+    let observe state proof outcome =
+        if ConstructionSearch.nodeId proof<>ConstructionSearch.nodeId observedProof then inspection<-None
+        observedState <- state
+        observedProof <- proof
+        detail <-
+            match outcome with
+            | None ->
+                ConstructionSearch.openGoals proof |> List.tryFind (fun goal -> not goal.External)
+                |> Option.map (fun goal -> $"Expanding {goal.Id} ({goal.Kind}).")
+                |> Option.defaultValue "Verifying the locally constructed witness."
+            | Some(Branch(goal,choices)) -> $"{goal}: {choices.Length} applicable productions."
+            | Some(Blocked gate) -> gate.Code+": "+String.concat "; " gate.Diagnostics
+            | Some(Built _) -> "Local construction witness found; external admission is still required."
+        writeSnapshot false
+    let inspect produce =
+        if timer.Elapsed.TotalSeconds-lastSnapshot>=0.5 then
+            inspection <- Some(produce ())
+            detail <- $"Checking {inspection.Value.Goal}: {inspection.Value.Rule}."
+            writeSnapshot false
+    writeSnapshot true
+    trace "planning" "running" 0 "Reserving the complete geared gait before choosing hardware, stock axles and support routes."
+    let duplicate = List.contains requestId seenRequests
+    let state,construction =
+        if duplicate then
+            let gate =
+                {Gate="construction-search";Outcome="reject";Code="duplicate-effective-request"
+                 Diagnostics=["This effective request was already searched in the current build obligation; no repeated search was run."]}
+            {initial with Status="duplicate-request";Rejections=[gate]},None
+        else WalkerConstructionTheory.advanceObserved observe inspect request oracleScope initial
+    observedState <- state
+    state.Pending |> Option.iter (fun proof -> observedProof<-proof)
+    detail <- if duplicate then "Duplicate effective request skipped." else $"Search stopped: {state.Status}."
+    writeSnapshot true
     File.WriteAllText(Path.Combine(directory,"construction-search.json"),Realization.json state+"\n")
     let generated =
         construction |> Option.toList |> List.map (fun built ->
@@ -178,11 +249,11 @@ let buildWalker options =
         changed=[{|path="construction";before=[baseline.GenotypeId];after=[WalkerConstruction.version;WalkerMotionSpace.version]|}]
         gates=screened.Decisions @ request.FootConstructionGates @ gates;generated=generated
         rejected=if generated.IsEmpty then [List.last gates] else []
-        counts={|proposals=1;realizationAttempts=1;exported=generated.Length
-                 rejected=(if generated.IsEmpty then 1 else 0);duplicates=0;dynamicTrials=0|}
+        counts={|proposals=1;realizationAttempts=(if duplicate then 0 else 1);exported=generated.Length
+                 rejected=(if generated.IsEmpty && not duplicate then 1 else 0);duplicates=(if duplicate then 1 else 0);dynamicTrials=0|}
         motionFirst={|version=WalkerMotionSpace.version;theoryVersion=WalkerConstructionTheory.version
                       packagingVersion=WalkerPackaging.version;maximumStates=512;maximumFrontier=64
-                      maximumTargetAssignments=32;visitedStates=state.Visited;status=state.Status
+                      maximumTargetAssignments=32;visitedStates=state.Visited;status=state.Status;requestId=requestId
                       qualification="Pending exact reconstruction, complete-assembly phase clearance and separately authorized dynamics."|}
     |}
     File.WriteAllText(Path.Combine(directory,"candidates.json"),Realization.json summary+"\n")
@@ -454,7 +525,7 @@ let main argv =
             0
         | command :: args when command="build-walker" || (command="construct-walker" && not(List.contains "--feedback" args)) ->
             let options = parseOptions (Set.ofList ["--parent";"--output";"--builder-policy";"--limit";"--steps";
-                                                   "--foot-policy";"--foot-layers";"--target-placements";"--ground-clearance-ldu";"--max-roll-degrees";"--max-pitch-degrees"]) args
+                                                   "--foot-policy";"--foot-layers";"--target-placements";"--seen-requests";"--ground-clearance-ldu";"--max-roll-degrees";"--max-pitch-degrees"]) args
             buildWalker options
         | "construct-walker" :: args ->
             let options = parseOptions (Set.ofList ["--parent"; "--output"; "--feedback"; "--conflicts"; "--builder-policy"; "--limit"; "--steps"]) args

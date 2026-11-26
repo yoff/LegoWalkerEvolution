@@ -47,6 +47,12 @@ workers may survive a dashboard terminal closing. Frozen Python source still
 depends on the installed simulator/native dependencies; do not replace those
 under active workers. Never run two writers against the same archive.
 
+New worlds use the simulator revision pinned by the current implementation.
+Restore that dependency before preparing/resuming a world; do not change the pin
+to match an older installed simulator. A simulator revision change prevents reuse
+of historical simulation measurements: bug fixes may invalidate both successes
+and failures. Retained motion inputs still require current construction and admission.
+
 Campaign runtime migration is an explicit **Prepare runtime** action beside Resume
 at the top of the dashboard. It freezes code/settings and
 queues fingerprinted retained motion inputs, without re-exporting, rebuilding or
@@ -70,6 +76,12 @@ ordinary trial. Explicit targeted requalification keeps its exact-input contract
 The board's **Queued / awaiting processing** column precedes Planning and Building.
 It includes candidates awaiting import or construction, not only candidates ready
 for screening. The display also corrects the older label/order in frozen snapshots.
+Each pipeline entry has one identity and one finite, typed lifecycle stage.
+Columns and terminal outcomes are projections of that collection, read from a
+consistent database snapshot. Contribution admission hands ownership to the
+bound birth; it is not a second board column. Contributions rejected before a
+birth exists remain in **Recently finished / rejected**, with their name and
+diagnostic. Startup/admission history remains a separate diagnostic view.
 
 Contribution admissions and ordinary candidate screening share the configured
 screening-worker capacity, with alternating scheduling when both queues have work.
@@ -109,6 +121,35 @@ The full build emits `request.json`, search evidence, candidate ground plans and
 construction proofs. Construction success still requires exact static admission.
 The Python carry-forward path performs bounded centering/layer alternatives and
 adds an immutable receipt; running `build-walker` alone is not a campaign receipt.
+
+### Watching the builder
+
+Newly prepared runtimes show **Current construction term and constraints** on
+building cards. The builder atomically updates `construction-live.json` at most
+twice per second (plus initial/final snapshots), including while support routes
+are being checked. `construction-events.jsonl` retains compact search events;
+the latest full snapshot retains the partial proof and geometric checkpoint.
+Counters describe the current physical replay/expansion, not lifetime totals or
+a percentage-complete estimate. A snapshot timestamp reveals stale progress.
+
+Side and top views show stock bounding envelopes: fixed/selected geometry, the
+current candidate, reserved sampled gait bounds, and reported conflicts.
+Projected boxes may overlap without a 3D collision. These are neither full LEGO
+renders nor evidence of mesh clearance, walking, or external admission.
+The term lists chosen productions, their prerequisites and unresolved goals.
+Interrupted/finished workers retain their snapshots, explicitly labeled stopped.
+
+Carry-forward tries up to four centering/layer alternatives, not four identical
+retries. Each effective request is fingerprinted with its complete request and
+construction/oracle scope; an already-searched identity is skipped before search.
+The CLI accepts prior identities through `--seen-requests` (a JSON array).
+Existing per-search caches remain scoped to their exact inputs; different
+requests do not inherit hard failure clauses merely because they look similar.
+No universal cross-request learning is claimed. Success or timeout stops this
+obligation, preserving existing accounting and partial-output behavior.
+
+These solver changes require explicit runtime preparation; do not patch a
+running version's frozen sources or binaries to enable the visualization.
 
 ## Evaluation semantics
 

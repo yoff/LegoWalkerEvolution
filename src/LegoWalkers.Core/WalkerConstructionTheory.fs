@@ -4,7 +4,11 @@ open System
 open System.Collections.Generic
 
 module WalkerConstructionTheory =
-    let version = "walker-construction-theory-v30"
+    let version = "walker-construction-theory-v31"
+    let familyStatesPerSlice = 16
+    let familyKinds =
+        ["socket-preserving-scaffold";"link-and-connector-realization";"component-placement"
+         "required-drive-geometry";"motor-mount-motif"]
 
     type private Alternative<'a> = {
         Key: string
@@ -316,6 +320,7 @@ module WalkerConstructionTheory =
     let start request oracleScope maximumStates maximumFrontier =
         WalkerPackaging.validate request |> Result.defaultWith (Realization.json >> invalidArg "request")
         ConstructionSearch.create (scope request oracleScope) (goals request) maximumStates maximumFrontier
+        |> ConstructionSearch.withFamilyScheduling familyKinds familyStatesPerSlice
 
     let estimatedCenter (request: WalkerPackagingRequest) (targets: WalkerComponentTarget list) =
         request.Balance |> Option.map (fun model ->
@@ -658,8 +663,7 @@ module WalkerConstructionTheory =
                 let axles = proof.Steps |> List.filter (fun step -> kinds[step.Goal]="axle-stock")
                 let family = familyKey proof
                 if gate.Code<>"bounded-support-domain-empty" || axles.IsEmpty
-                   || (proof.Steps |> List.exists (fun step -> kinds[step.Goal]="mount-and-bearing"))
-                   || not(minimizedFamilies.Add family) then outcome
+                   || (proof.Steps |> List.exists (fun step -> kinds[step.Goal]="mount-and-bearing")) then outcome
                 else
                     // Axle domains are independent until supports and the selected bearing reservations are installed.
                     let domains =
@@ -668,30 +672,40 @@ module WalkerConstructionTheory =
                             | true,choices -> Some(step.Goal,choices |> List.map (fun c -> c.Step.Choice))
                             | _ -> None)
                         |> List.sortBy (fun (_,choices) -> choices.Length)
-                    use cancellation = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds 2.0)
-                    let rejects assignment =
-                        let values = Map.ofList assignment
-                        let steps = proof.Steps |> List.map (fun step ->
-                            if kinds[step.Goal]<>"axle-stock" || values[step.Goal]=step.Choice then step
-                            else
-                                axleDomains[(family,step.Goal)] |> List.find (fun choice -> choice.Step.Choice=values[step.Goal]) |> _.Step)
-                        counterfactual <- true
-                        counterfactualToken <- cancellation.Token
-                        try
-                            try
-                                counterfactualToken.ThrowIfCancellationRequested()
-                                Some(match expand {proof with Steps=steps} nogoods with
-                                     | BlockedBy(other,_) -> other.Code="bounded-support-domain-empty"
-                                     | _ -> false)
-                            with
-                            | :? OperationCanceledException as error when error.CancellationToken=cancellation.Token -> None
-                        finally
-                            counterfactual <- false
-                            counterfactualToken <- System.Threading.CancellationToken.None
-                    let reduced,checks = ConstructionSearch.minimizeFiniteConflict 32 bindings domains rejects
-                    let diagnostics = gate.Diagnostics @ [$"finite-conflict-checks={checks}"]
-                                      @ (if cancellation.IsCancellationRequested then ["finite-conflict-budget-exhausted"] else [])
-                    BlockedBy({gate with Diagnostics=diagnostics},reduced)
+                    let gate,reduced =
+                        if not(minimizedFamilies.Add family) then gate,bindings
+                        else
+                            use cancellation = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds 2.0)
+                            let rejects assignment =
+                                let values = Map.ofList assignment
+                                let steps = proof.Steps |> List.map (fun step ->
+                                    if kinds[step.Goal]<>"axle-stock" || values[step.Goal]=step.Choice then step
+                                    else
+                                        axleDomains[(family,step.Goal)] |> List.find (fun choice -> choice.Step.Choice=values[step.Goal]) |> _.Step)
+                                counterfactual <- true
+                                counterfactualToken <- cancellation.Token
+                                try
+                                    try
+                                        counterfactualToken.ThrowIfCancellationRequested()
+                                        Some(match expand {proof with Steps=steps} nogoods with
+                                             | BlockedBy(other,_) -> other.Code="bounded-support-domain-empty"
+                                             | _ -> false)
+                                    with
+                                    | :? OperationCanceledException as error when error.CancellationToken=cancellation.Token -> None
+                                finally
+                                    counterfactual <- false
+                                    counterfactualToken <- System.Threading.CancellationToken.None
+                            let reduced,checks = ConstructionSearch.minimizeFiniteConflict 32 bindings domains rejects
+                            let diagnostics = gate.Diagnostics @ [$"finite-conflict-checks={checks}"]
+                                              @ (if cancellation.IsCancellationRequested then ["finite-conflict-budget-exhausted"] else [])
+                            {gate with Diagnostics=diagnostics},reduced
+                    let retained = reduced |> List.map fst |> Set.ofList
+                    let domains = domains |> List.filter (fun (goal,_) -> retained.Contains goal)
+                    let clauses =
+                        reduced::(nogoods |> List.filter (fun nogood ->
+                            nogood.Feedback.Exact && nogood.Feedback.Scope=proof.Scope) |> List.map _.Bindings)
+                    let covered,checks = ConstructionSearch.minimizeCoveredConflict 256 reduced domains clauses
+                    BlockedBy({gate with Diagnostics=gate.Diagnostics @ [$"covered-conflict-checks={checks}"]},covered)
             | _ -> outcome
 
     let expansion request oracleScope = expansionObserved None request oracleScope

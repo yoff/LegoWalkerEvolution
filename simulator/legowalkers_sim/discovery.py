@@ -78,7 +78,7 @@ POLICY = {
     "construction": {"version": "technic-construction-v11",
                      "motionFirstBuilder": {
                          "version": "sampled-motion-ground-reservation-v2",
-                         "theoryVersion": "walker-construction-theory-v30",
+                         "theoryVersion": "walker-construction-theory-v31",
                          "packagingVersion": "packaging-realization-v27",
                          "scaffold": "Search backbone relocations and stock reconnections to retained walking sockets; original chassis remains an alternative.",
                          "balance": "Prefer joint motor/battery/receiver layouts with smaller normalized source-mass COM offsets from swept-foot bounds before support routing; not dynamic qualification.",
@@ -88,6 +88,7 @@ POLICY = {
                          "routing": "Reject unsafe bridge extensions before recursing, so obstructed prefixes cannot consume the complete-route candidate cap.",
                          "activation": "build-walker and construct-walker without feedback reserve the full geared gait before hardware/support placement.",
                          "maximumStates": 512, "maximumFrontier": 64, "maximumTargetAssignments": 32,
+                         "familyStatesPerSlice": 16, "frontierOverflow": "checkpointed-deferred-alternatives",
                          "maximumRouteCandidatesPerTopology": 512,
                          "scope": "Conservative stock envelopes with declared connector/socket engagement; exact phase gate still mandatory.",
                          "limits": "No changes to export, reconstruction, prefix, repair-depth or full-trial allowances.",

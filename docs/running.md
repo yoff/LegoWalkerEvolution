@@ -207,14 +207,27 @@ once per selected scaffold/walking/hardware/drivetrain/motor-motif family, and o
 before any support has been selected. Incomplete checking leaves bindings intact;
 individually irrelevant choices are not assumed jointly irrelevant. These extra
 propagation checks are not main proof-state visits or dynamic simulation trials.
-Learned nogoods
-are retained in search checkpoints; they are not transplanted into different
+Previously learned exact, scope-matching clauses can also eliminate an axle
+binding when they cover every joint assignment of its finite domain and all
+already-freed domains. Coverage reduction uses at most 256 inexpensive clause
+checks per failure, without new geometry checks or simulation. Missing coverage
+retains the binding; a partial collection of failed values never rejects an
+untested value.
+Learned nogoods are retained in search checkpoints; they are not transplanted into different
 requests or simulator/oracle versions. Live snapshots report learned-conflict
 counts alongside checked/rejected parts and cache hits. Compact rejection events
 record every failure and its bindings without the visualization throttle.
 Only repair-relevant feedback invalidates replay caches; scaffold identity is
-included when caching walking repairs. Search remains bounded
-depth-first feasibility search, not globally optimal branch-and-bound.
+included when caching walking repairs. Within each layout family, search remains
+depth-first. Every sixteen visited states it selects a pending branch by
+lexicographically least-visited scaffold/walking/hardware/drivetrain/motor-motif
+prefixes, retaining cost order for ties. Slices count main state expansions, not
+seconds; an expensive geometry expansion cannot be preempted by the scheduler.
+The 64-node frontier is an active window, not a deletion cap: overflow branches
+are deferred and checkpointed, and participate in slice selection. Pending proof
+memory can therefore exceed 64 nodes. This prevents an early axle family from
+consuming the entire state budget or dropping the inherited scaffold.
+Search is still bounded feasibility search, not globally optimal branch-and-bound.
 Exhausting a truncated domain is a failure of this bounded grammar, never a
 proof that no physical construction exists.
 

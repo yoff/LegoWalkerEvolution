@@ -189,6 +189,7 @@ let buildWalker options =
                 openGoals=ConstructionSearch.openGoals observedProof;inspection=inspection
                 search={|visited=observedState.Visited;maximumStates=observedState.MaximumStates
                          frontier=observedState.Frontier.Length;pruned=observedState.Pruned;discarded=observedState.Discarded
+                         deferred=observedState.Deferred.Length
                          learnedConflicts=observedState.Nogoods.Length|}
                 authority="Live partial construction and sampled stock envelopes; not a qualified assembly or physics."
                 dynamicTrials=0
@@ -279,6 +280,7 @@ let buildWalker options =
                  rejected=(if generated.IsEmpty && not duplicate then 1 else 0);duplicates=(if duplicate then 1 else 0);dynamicTrials=0|}
         motionFirst={|version=WalkerMotionSpace.version;theoryVersion=WalkerConstructionTheory.version
                       packagingVersion=WalkerPackaging.version;maximumStates=512;maximumFrontier=64
+                      familyStatesPerSlice=WalkerConstructionTheory.familyStatesPerSlice
                       maximumTargetAssignments=32;visitedStates=state.Visited;status=state.Status;requestId=requestId
                       qualification="Pending exact reconstruction, complete-assembly phase clearance and separately authorized dynamics."|}
     |}

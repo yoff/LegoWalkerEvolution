@@ -124,6 +124,70 @@ module ConstructionSearchTests =
         Assert.Equal(2,calls)
 
     [<Fact>]
+    let ``covered conflicts generalize only jointly exhausted finite domains`` () =
+        let bindings = ["layout","blocked";"a","0";"b","0"]
+        let domains = ["a",["0";"1"];"b",["0";"1"]]
+        let clauses =
+            [for a,b in ["0","0";"0","1";"1","0"] do
+                 yield ["layout","blocked";"a",a;"b",b]]
+        let partial,_ = ConstructionSearch.minimizeCoveredConflict 32 bindings domains clauses
+        Assert.Equal<(string * string) list>(["layout","blocked";"b","0"],partial)
+        let complete,_ = ConstructionSearch.minimizeCoveredConflict 32 bindings domains
+                            (["layout","blocked";"a","1";"b","1"]::clauses)
+        Assert.Equal<(string * string) list>(["layout","blocked"],complete)
+        let unrelated = clauses |> List.map (fun clause ->
+            clause |> List.map (fun (goal,value) -> goal,if goal="layout" then "other" else value))
+        let unchanged,_ = ConstructionSearch.minimizeCoveredConflict 32 bindings domains unrelated
+        Assert.Equal<(string * string) list>(bindings,unchanged)
+
+    [<Fact>]
+    let ``family slices reach other layouts and preserve deferred branches across checkpoints`` () =
+        let goals = [{goal "layout" [] false with Kind="layout"}
+                     goal "axle" ["layout"] false;goal "oracle" [] true]
+        let initial = ConstructionSearch.create "fair-scope" goals 4 1
+                      |> ConstructionSearch.withFamilyScheduling ["layout"] 4
+        let mutable layouts = []
+        let expand (proof: ConstructionProof) _ =
+            let values = proof.Steps |> List.map (fun step -> step.Goal,step.Choice) |> Map.ofList
+            if not(values.ContainsKey "layout") then
+                Branch("layout",["a";"b";"c"] |> List.map (fun value -> choice "layout" value [] [] [] []))
+            elif not(values.ContainsKey "axle") then
+                layouts <- layouts @ [values["layout"]]
+                let count = if values["layout"]="c" then 1 else 40
+                Branch("axle",[for index in 1..count do yield choice "axle" (string index) ["layout"] [] [] []])
+            elif values["layout"]="c" then Built("clear",proof)
+            else Blocked {Gate="support";Outcome="reject";Code="blocked";Diagnostics=[]}
+        let limited,witness = ConstructionSearch.next expand initial
+        Assert.True(witness.IsNone)
+        Assert.Equal(0,limited.Discarded)
+        Assert.InRange(limited.Frontier.Length,0,1)
+        Assert.NotEmpty(limited.Deferred)
+        let options = JsonSerializerOptions(PropertyNamingPolicy=JsonNamingPolicy.CamelCase)
+        let checkpoint = JsonSerializer.Deserialize<ConstructionSearchState>(Realization.json limited,options)
+        Assert.Equal(limited,checkpoint)
+        let resumed,built = ConstructionSearch.next expand {checkpoint with MaximumStates=64}
+        Assert.True(built.IsSome)
+        Assert.Equal<string list>(["a";"b";"c"],layouts)
+        Assert.InRange(resumed.Visited,1,12)
+        Assert.NotEmpty(resumed.Deferred)
+
+    [<Fact>]
+    let ``active frontier window never drops a late viable production`` () =
+        let initial = ConstructionSearch.create "deferred-scope" [goal "a" [] false;goal "oracle" [] true] 64 2
+        let expand (proof: ConstructionProof) _ =
+            if proof.Steps.IsEmpty then
+                Branch("a",[for index in 0..19 do
+                                yield {choice "a" (string index) [] [] [] [] with
+                                           Step={ (choice "a" (string index) [] [] [] []).Step with Cost=float index}}])
+            elif proof.Steps.Head.Choice="19" then Built("late",proof)
+            else Blocked {Gate="support";Outcome="reject";Code="blocked";Diagnostics=[]}
+        let state,witness = ConstructionSearch.next expand initial
+        Assert.True(witness.IsSome)
+        Assert.Equal("19",witness.Value.Steps.Head.Choice)
+        Assert.Equal(21,state.Visited)
+        Assert.Equal(0,state.Discarded)
+
+    [<Fact>]
     let ``local causal conflict skips unrelated siblings and survives checkpoint continuation`` () =
         let initial = seed [goal "layout" [] false;goal "easy" ["layout"] false
                             goal "socket" ["layout"] false;goal "oracle" [] true]
@@ -170,7 +234,8 @@ module ConstructionSearchTests =
             Branch("a",[choice "a" "one" [] [] [] [];choice "a" "two" [] [] [] []])) bound
         Assert.Equal("state-bound-reached",limited.Status)
         Assert.Equal(1,limited.Visited)
-        Assert.Equal(1,limited.Discarded)
+        Assert.Equal(0,limited.Discarded)
+        Assert.Single(limited.Deferred) |> ignore
 
     [<Fact>]
     let ``observing search exposes live partial terms without changing decisions or accounting`` () =

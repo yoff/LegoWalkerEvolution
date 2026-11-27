@@ -59,9 +59,18 @@ type ConstructionNogood = {
     Focus: string list
 }
 
+type ConstructionSchedule = {
+    FamilyKinds: string list
+    StatesPerSlice: int
+    SliceVisited: int
+    FamilyVisits: (string * int) list
+}
+
 type ConstructionSearchState = {
     Scope: string
     Frontier: ConstructionProof list
+    Deferred: ConstructionProof list
+    Schedule: ConstructionSchedule option
     Nogoods: ConstructionNogood list
     Refresh: ConstructionProof list
     SeenNodes: string list
@@ -83,7 +92,7 @@ type ConstructionExpansion<'witness> =
     | BlockedBy of gate: GateDecision * bindings: (string * string) list
 
 module ConstructionSearch =
-    let version = "obligation-search-v8"
+    let version = "obligation-search-v9"
     let private require condition message = if not condition then invalidArg "construction-proof" message
     let private nonempty (text: string) = not(String.IsNullOrWhiteSpace text)
     let private distinct items = List.length items=(Set.ofList items).Count
@@ -122,6 +131,13 @@ module ConstructionSearch =
                     freed <- proposed
                     remaining <- remaining |> List.filter (fun (id,_) -> id<>goal)
         remaining,checks
+
+    let minimizeCoveredConflict maximumChecks bindings domains clauses =
+        minimizeFiniteConflict maximumChecks bindings domains (fun assignment ->
+            let values = Map.ofList assignment
+            Some(clauses |> List.exists (fun clause ->
+                not(List.isEmpty clause)
+                && clause |> List.forall (fun (goal,choice) -> Map.tryFind goal values=Some choice))))
 
     let validate (proof: ConstructionProof) =
         require (nonempty proof.Scope && distinct (proof.Goals |> List.map _.Id)) "Scope and unique goal IDs are required."
@@ -190,24 +206,56 @@ module ConstructionSearch =
         require (maximumStates>=1 && maximumStates<=16384 && maximumFrontier>=1 && maximumFrontier<=1024)
                 "Search bounds must be within 1..16384 states and 1..1024 frontier nodes."
         let proof = validate {Scope=scope;Goals=goals;Steps=[]}
-        {Scope=scope;Frontier=[proof];Nogoods=[];Refresh=[];SeenNodes=[];SeenWitnesses=[];Pending=None
+        {Scope=scope;Frontier=[proof];Deferred=[];Schedule=None
+         Nogoods=[];Refresh=[];SeenNodes=[];SeenWitnesses=[];Pending=None
          Visited=0;Pruned=0;Discarded=0;MaximumStates=maximumStates;MaximumFrontier=maximumFrontier
          Status="searching";Rejections=[]}
 
+    let withFamilyScheduling familyKinds statesPerSlice state =
+        require (not(List.isEmpty familyKinds) && distinct familyKinds
+                 && List.forall nonempty familyKinds && statesPerSlice>=1)
+                "Family scheduling needs distinct goal kinds and a positive state slice."
+        require (state.Visited=0) "Configure scheduling before visiting search states."
+        {state with Schedule=Some {FamilyKinds=familyKinds;StatesPerSlice=statesPerSlice
+                                   SliceVisited=0;FamilyVisits=[]}}
+
     let private bounded frontier state =
-        let distinct = frontier |> List.distinctBy nodeId
-        let discarded = max 0 (distinct.Length-state.MaximumFrontier)
-        let kept =
-            if discarded=0 then distinct
-            else
-                // Keep an alternative at each backtracking depth instead of losing all early routing choices.
-                let reserved = distinct |> List.distinctBy (fun p -> p.Steps.Length) |> List.truncate state.MaximumFrontier
-                let reservedIds = reserved |> List.map nodeId |> Set.ofList
-                let extra = distinct |> List.filter (fun p -> not(reservedIds.Contains(nodeId p)))
-                            |> List.truncate (state.MaximumFrontier-reserved.Length)
-                let ids = reservedIds |> Set.union (extra |> List.map nodeId |> Set.ofList)
-                distinct |> List.filter (fun p -> ids.Contains(nodeId p))
-        {state with Frontier=kept;Discarded=state.Discarded+discarded}
+        let pending = frontier @ state.Deferred |> List.distinctBy nodeId
+        {state with Frontier=pending |> List.truncate state.MaximumFrontier
+                    Deferred=pending |> List.skip (min pending.Length state.MaximumFrontier)}
+
+    let private familyPrefixes schedule (proof: ConstructionProof) =
+        let kinds = proof.Goals |> List.map (fun goal -> goal.Id,goal.Kind) |> Map.ofList
+        proof.Steps |> List.filter (fun step -> List.contains kinds[step.Goal] schedule.FamilyKinds)
+        |> List.scan (fun prefix step -> prefix @ [step.Goal,step.Choice]) []
+        |> List.tail |> List.map (Realization.json >> Export.sha256)
+
+    let private selectSlice state =
+        match state.Schedule with
+        | Some schedule when schedule.SliceVisited>=schedule.StatesPerSlice ->
+            let pending = state.Frontier @ state.Deferred
+            let visits = Map.ofList schedule.FamilyVisits
+            let score proof =
+                let counts = familyPrefixes schedule proof |> List.map (fun key ->
+                    Map.tryFind key visits |> Option.defaultValue 0)
+                counts @ List.replicate (max 0 (schedule.FamilyKinds.Length-counts.Length)) 0
+            let selected = pending |> List.minBy score
+            let key = nodeId selected
+            let rest = pending |> List.filter (fun proof -> nodeId proof<>key)
+            bounded (selected::rest) {state with Deferred=[];Schedule=Some {schedule with SliceVisited=0}}
+        | _ when state.Frontier.IsEmpty -> bounded [] state
+        | _ -> state
+
+    let private recordFamilyVisit proof state =
+        match state.Schedule with
+        | None -> state
+        | Some schedule ->
+            let visits =
+                familyPrefixes schedule proof |> List.fold (fun counts key ->
+                    Map.add key (1+(Map.tryFind key counts |> Option.defaultValue 0)) counts)
+                    (Map.ofList schedule.FamilyVisits)
+            let schedule = {schedule with SliceVisited=schedule.SliceVisited+1;FamilyVisits=Map.toList visits}
+            {state with Schedule=Some schedule}
 
     let reject (feedback: ConstructionFeedback) state =
         require (feedback.Scope=state.Scope && nonempty feedback.EvidenceSha256 && nonempty feedback.Reason)
@@ -267,6 +315,13 @@ module ConstructionSearch =
         require (state.MaximumStates>=1 && state.MaximumStates<=16384
                  && state.MaximumFrontier>=1 && state.MaximumFrontier<=1024
                  && state.Visited>=0 && state.Pruned>=0 && state.Discarded>=0) "Checkpoint search accounting or bounds are invalid."
+        state.Schedule |> Option.iter (fun schedule ->
+            require (schedule.StatesPerSlice>=1 && schedule.SliceVisited>=0
+                     && not schedule.FamilyKinds.IsEmpty && distinct schedule.FamilyKinds
+                     && List.forall nonempty schedule.FamilyKinds
+                     && distinct (schedule.FamilyVisits |> List.map fst)
+                     && (schedule.FamilyVisits |> List.forall (fun (key,count) -> nonempty key && count>=0)))
+                    "Checkpoint family scheduling is invalid.")
         let mutable state = state
         let feedback = state.Nogoods
         let mutable refreshed = []
@@ -296,7 +351,8 @@ module ConstructionSearch =
             priority,changed.Cost,changed.Goal,nodeId p) |> List.map snd
         state <- bounded (refreshed @ state.Frontier) {state with Refresh=[]}
         let mutable result = None
-        while result.IsNone && not state.Frontier.IsEmpty && state.Visited<state.MaximumStates do
+        while result.IsNone && not(state.Frontier.IsEmpty && state.Deferred.IsEmpty) && state.Visited<state.MaximumStates do
+            state <- selectSlice state
             let proof = state.Frontier.Head
             require (proof.Scope=state.Scope) "Frontier proof scope differs from the search."
             state <- {state with Frontier=state.Frontier.Tail}
@@ -305,6 +361,7 @@ module ConstructionSearch =
                 state <- {state with Pruned=state.Pruned+1}
             else
                 state <- {state with SeenNodes=key::state.SeenNodes;Visited=state.Visited+1}
+                state <- recordFamilyVisit proof state
                 observe state proof None
                 let expansion = expand proof state.Nogoods
                 observe state proof (Some expansion)
@@ -341,7 +398,7 @@ module ConstructionSearch =
                         result <- Some witness
         if result.IsNone then
             let status =
-                if state.Frontier.IsEmpty then
+                if state.Frontier.IsEmpty && state.Deferred.IsEmpty then
                     if state.Discarded>0 then "frontier-bound-exhausted" else "productions-exhausted"
                 else "state-bound-reached"
             state <- {state with Status=status}

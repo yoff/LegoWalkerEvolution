@@ -16,6 +16,20 @@ type WalkerDriveRealization = {
     InternalCompoundBearings: bool
 }
 
+type WalkerComponentMass = {
+    Part: string
+    MassKg: float
+    CenterLdu: Vec3
+}
+
+type WalkerBalanceModel = {
+    TotalMassKg: float
+    CenterOfMassLdu: Vec3
+    SupportCenterLdu: Vec3
+    SupportHalfSpanLdu: Vec3
+    Components: WalkerComponentMass list
+}
+
 type WalkerPackagingRequest = {
     Reference: MotionProgram
     Program: MotionProgram
@@ -25,6 +39,7 @@ type WalkerPackagingRequest = {
     ObsoletePartIds: string list
     GroundClearance: MotionGroundClearance option
     FootConstructionGates: GateDecision list
+    Balance: WalkerBalanceModel option
 }
 
 type WalkerPackagingConstruction = {
@@ -56,7 +71,7 @@ type WalkerConstructionInspection = {
 }
 
 module WalkerPackaging =
-    let version = "packaging-realization-v19"
+    let version = "packaging-realization-v21"
     let maximumAttempts = 2
     let maximumAnchorChoices = 64
     let private zAxis = Vec3.create 0 0 1
@@ -255,7 +270,18 @@ module WalkerPackaging =
         let targets = request.Targets |> List.map (fun t -> t.Placement.Id)
         let driveBodies = request.Program.Motor.Body::(request.Program.Transmissions |> List.collect (fun t -> [t.Input;t.Output])) |> Set.ofList
         let stockIds = (request.Drive.Gears @ request.Drive.Axles) |> List.map (snd >> _.Id)
-        if targets.Length<>3 || Set.ofList targets<>expected then
+        let invalidBalance = request.Balance |> Option.exists (fun model ->
+            isNull(box model) || isNull(box model.Components)
+            || not(Double.IsFinite model.TotalMassKg) || model.TotalMassKg<=0.0
+            || not(Vec3.finite model.CenterOfMassLdu && Vec3.finite model.SupportCenterLdu && Vec3.finite model.SupportHalfSpanLdu)
+            || model.SupportHalfSpanLdu.X<=0.0 || model.SupportHalfSpanLdu.Z<=0.0
+            || model.Components |> List.exists (fun c -> isNull(box c))
+            || (model.Components |> List.map _.Part |> Set.ofList)<>expected || model.Components.Length<>3
+            || model.Components |> List.exists (fun c -> not(Double.IsFinite c.MassKg) || c.MassKg<=0.0 || not(Vec3.finite c.CenterLdu))
+            || (model.Components |> List.sumBy _.MassKg)>model.TotalMassKg+1e-9)
+        if invalidBalance then
+            Error(error "invalid-balance-model" ["Balance estimates require positive mass, finite centers/support spans and exactly the three hardware component masses."])
+        elif targets.Length<>3 || Set.ofList targets<>expected then
             Error(error "invalid-component-targets" ["Exactly one battery, receiver and motor target is required."])
         elif request.Targets |> List.exists (fun t ->
             not(Vec3.finite t.Placement.Position && Rotation.valid t.Placement.Rotation && Vec3.finite t.ToleranceLdu)
@@ -322,6 +348,10 @@ module WalkerPackaging =
     let internal motorSupportPlane (motor: WalkerPlacement) =
         motor.Position.Z-10.0*motor.Rotation.Z.Z
 
+    let internal motorOutputAllows (motor: WalkerPlacement) minimum maximum =
+        if motor.Rotation.Z.Z>0.0 then maximum<=motor.Position.Z+20.0+1e-6
+        else minimum>=motor.Position.Z-20.0-1e-6
+
     let internal motionSpace (request: WalkerPackagingRequest) screened =
         let _,remove = scaffold request
         let genome =
@@ -359,10 +389,10 @@ module WalkerPackaging =
         {Reference=s.Program;Program=s.Program;Source=g
          Targets=g.Bodies |> List.collect _.Parts |> List.filter (fun p ->
             List.contains p.Id ["payload-battery";"payload-receiver";g.MotorPart])
-                 |> List.map (fun p -> {Placement=p;ToleranceLdu=if p.Id=g.MotorPart then Vec3.create 0 0 80 else Vec3.create 240 240 240})
+                 |> List.map (fun p -> {Placement=p;ToleranceLdu=if p.Id=g.MotorPart then Vec3.create 0 0 240 else Vec3.create 240 240 240})
          Drive={Root=s.Program.Motor.Body;Gears=gears;Axles=axles;MotorClockScale=1.0;InternalCompoundBearings=false}
          ObsoletePartIds=obsolete;GroundClearance=Some WalkerMotionSpace.defaultGroundClearance
-         FootConstructionGates=footGates}
+         FootConstructionGates=footGates;Balance=None}
 
     let rebuildRequest s g = rebuildRequestWithFeet true s g
 
@@ -641,9 +671,7 @@ module WalkerPackaging =
                                 let minimum = List.min (wallDepths @ motorSockets)
                                 let maximum = List.max (wallDepths @ motorSockets)
                                 let motorTarget = request.Targets |> List.find (fun t -> t.Placement.Id=request.Source.MotorPart) |> _.Placement
-                                if body=request.Drive.Root &&
-                                   ((motorTarget.Rotation.Z.Z>0.0 && maximum>motorTarget.Position.Z+20.0+1e-6)
-                                    || (motorTarget.Rotation.Z.Z<0.0 && minimum<motorTarget.Position.Z-20.0-1e-6)) then
+                                if body=request.Drive.Root && not(motorOutputAllows motorTarget minimum maximum) then
                                     failure<-Some(error "motor-shaft-through-housing" ["Required bearing/load sockets extend past the supported motor output channel."])
                                 let span = maximum-minimum
                                 let stocks = Catalog.axleParts |> List.filter (fun part ->

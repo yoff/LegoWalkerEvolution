@@ -148,6 +148,34 @@ requests do not inherit hard failure clauses merely because they look similar.
 No universal cross-request learning is claimed. Success or timeout stops this
 obligation, preserving existing accounting and partial-output behavior.
 
+Motor placement and drivetrain planes are searched together. The constructor
+considers centering the motor housing across the mean foot depth, inward/outward
+axial offsets and its original placement, within an explicit 240 LDU axial
+tolerance on rebuilt requests. Up to nine motor placements share the existing
+32 target-assignment bound, with one assignment reserved per feasible motor
+placement. Each selected placement gets compatible input-mesh plane alternatives;
+stock axles, supports, housing clearance and exact admission remain mandatory.
+This does not add arbitrary lateral motor positions, new shaft centers or new
+transmission topology. Already-compound drivetrains retain their existing planes.
+Centering is an alternative, not a bypass: retained rails, bridges and walking
+stock may rule out every inward position even when a gear route exists.
+
+When source mass estimation succeeds, joint motor/battery/receiver layouts are
+ranked before support routing by squared horizontal COM offset, normalized by
+the sampled swept-foot half-spans. Battery corrections are recomputed for each
+motor/receiver choice instead of balancing only the inherited configuration.
+Feasible layouts with better estimated balance lead the existing 32-assignment
+search; motor alternatives remain reserved for backtracking. The source mass,
+component centers and support bounds are saved in `balance-model.json` and passed
+through CLI `--balance-model FILE`. The model is part of the exact request scope.
+No model is supplied for layout-preserving repairs or when source mass estimation
+fails; the existing explicit diagnostic and geometric search remain in effect.
+This is a preference, not a rejection or qualification: source mass excludes
+new supports, and swept-foot bounds are not simultaneous stance contacts.
+Preparation compares the compiler's reported construction-policy versions to
+the current implementation and rejects a stale CLI instead of freezing newer
+source beside older executable behavior. Rebuild the CLI before preparing.
+
 These solver changes require explicit runtime preparation; do not patch a
 running version's frozen sources or binaries to enable the visualization.
 

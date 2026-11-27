@@ -4,7 +4,7 @@ open System
 open System.Collections.Generic
 
 module WalkerConstructionTheory =
-    let version = "walker-construction-theory-v22"
+    let version = "walker-construction-theory-v24"
 
     type private Alternative<'a> = {
         Key: string
@@ -159,7 +159,7 @@ module WalkerConstructionTheory =
          goal "drive" "required-drive-geometry" request.Drive.Root ["walking";"targets"] false]
         @ [goal "oracle" "exact-reconstruction-mass-collision-load" "complete assembly" [] true]
 
-    let driveOptions (request: WalkerPackagingRequest) =
+    let private driveOptionsAtPlanes extraPlanes (request: WalkerPackagingRequest) =
         let obsolete = Set.ofList request.ObsoletePartIds
         let outputPlanes = request.Drive.Gears |> List.choose (fun (body,gear) ->
             let parts = request.Source.Bodies |> List.tryFind (fun b -> b.Body=body) |> Option.map _.Parts |> Option.defaultValue []
@@ -172,7 +172,7 @@ module WalkerConstructionTheory =
             if body=request.Drive.Root || sockets.IsEmpty then None
             else Some(body,(List.average sockets)+40.0)) |> Map.ofList
         let rootPlane = request.Drive.Gears |> List.find (fun (body,_) -> body=request.Drive.Root) |> snd |> _.Position.Z
-        let route fallbackPlane =
+        let route outputPlanes fallbackPlane =
             let edges = request.Program.Transmissions |> List.map (fun edge ->
                 let plane =
                     if edge.Input=request.Drive.Root || edge.Output=request.Drive.Root then rootPlane
@@ -192,9 +192,12 @@ module WalkerConstructionTheory =
                     body,{gear with Id=(if index=0 then gear.Id else gear.Id+"-compound")
                                     Part=part;Position={gear.Position with Z=plane}}))
             {request with Drive={request.Drive with Gears=gears;InternalCompoundBearings=false}}
+        let profiles = outputPlanes::(extraPlanes |> List.map (fun plane -> outputPlanes |> Map.map (fun _ _ -> plane)))
         let alternatives =
-            rootPlane::(outputPlanes |> Map.toList |> List.map snd |> List.distinct |> List.sort)
-            |> List.map route |> List.distinctBy (fun route -> identity route.Drive)
+            profiles |> List.collect (fun profile ->
+                rootPlane::(profile |> Map.toList |> List.map snd |> List.distinct |> List.sort)
+                |> List.map (route profile))
+            |> List.distinctBy (fun route -> identity route.Drive)
             |> List.filter (fun route -> route.Drive.Gears<>request.Drive.Gears && not route.Drive.Gears.IsEmpty)
         let interior = alternatives |> List.choose (fun route ->
             let groups = route.Drive.Gears |> List.groupBy fst |> List.map (fun (_,gears) -> gears |> List.map snd)
@@ -219,6 +222,8 @@ module WalkerConstructionTheory =
         |> fun routes ->
             if request.Drive.Gears |> List.countBy fst |> List.exists (fun (_,count) -> count>1) then [request]
             else routes
+
+    let driveOptions request = driveOptionsAtPlanes [] request
 
     let withMotorReduction reduction (request: WalkerPackagingRequest) =
         if reduction=1 then request
@@ -247,30 +252,90 @@ module WalkerConstructionTheory =
 
     let targetOptions (request: WalkerPackagingRequest) =
         let motor = request.Targets |> List.find (fun t -> t.Placement.Id=request.Source.MotorPart)
+        let envelope = WalkerMotionSpace.partEnvelope motor.Placement
+        let center = request.Source.Feet |> List.averageBy _.Depth
+        let centered = center-(envelope.Low.Z+envelope.High.Z)/2.0
         let gears = (request.Drive.Gears |> List.map snd)
                     @ (driveOptions request |> List.collect (fun route -> route.Drive.Gears |> List.map snd))
                     |> List.distinct
         let shifted =
-            [20.0;40.0;60.0;80.0] |> List.choose (fun setback ->
-                let delta = Vec3.scale setback motor.Placement.Rotation.Z
+            (Vec3.create 0 0 centered)::([-80.0;-60.0;-40.0;-20.0;20.0;40.0;60.0;80.0]
+                |> List.map (fun setback -> Vec3.scale setback motor.Placement.Rotation.Z))
+            |> List.choose (fun delta ->
                 if abs delta.X<=motor.ToleranceLdu.X && abs delta.Y<=motor.ToleranceLdu.Y && abs delta.Z<=motor.ToleranceLdu.Z then
                     Some(request.Targets |> List.map (fun target ->
                         if target.Placement.Id=motor.Placement.Id then
                             {target with Placement={target.Placement with Position=Vec3.add target.Placement.Position delta}}
                         else target))
                 else None)
-        request.Targets::shifted
-        |> List.sortBy (fun targets ->
-            let placed = targets |> List.find (fun t -> t.Placement.Id=request.Source.MotorPart) |> _.Placement
+        let ranked = request.Targets::shifted |> List.distinct |> List.sortBy (fun targets ->
+            let placed = targets |> List.find (fun t -> t.Placement.Id=motor.Placement.Id) |> _.Placement
+            let bounds = WalkerMotionSpace.partEnvelope placed
+            abs((bounds.Low.Z+bounds.High.Z)/2.0-center),
             gears |> List.sumBy (WalkerClearance.initialOverlapRisk placed),
-            // Reserve the side bracket's thickness plus 10 LDU clearance from rotating gear faces.
             gears |> List.sumBy (fun gear ->
                 max 0.0 (30.0-abs(WalkerPackaging.motorSupportPlane placed-gear.Position.Z))),
             Vec3.distance placed.Position motor.Placement.Position)
+        let retained = ranked |> List.truncate 8
+        if List.contains request.Targets retained then ranked |> List.truncate 9
+        else retained @ [request.Targets]
+
+    let motorDriveOptions (request: WalkerPackagingRequest) =
+        let motor = request.Targets |> List.find (fun t -> t.Placement.Id=request.Source.MotorPart) |> _.Placement
+        let envelope = WalkerMotionSpace.partEnvelope motor
+        let root = request.Drive.Gears |> List.find (fun (body,_) -> body=request.Drive.Root) |> snd
+        let original = request.Source.Bodies |> List.collect _.Parts |> List.find (fun p -> p.Id=motor.Id)
+        let compound = request.Drive.Gears |> List.countBy fst |> List.exists (fun (_,count) -> count>1)
+        let legacy = driveOptions request
+        let routes =
+            if compound then legacy
+            else
+                [root.Position.Z;root.Position.Z+motor.Position.Z-original.Position.Z
+                 motor.Position.Z-40.0*motor.Rotation.Z.Z;motor.Position.Z-80.0*motor.Rotation.Z.Z]
+                |> List.distinct |> List.collect (fun plane ->
+                    let gears = request.Drive.Gears |> List.map (fun (body,gear) ->
+                        if body=request.Drive.Root then body,{gear with Position={gear.Position with Z=plane}}
+                        else body,gear)
+                    driveOptionsAtPlanes [plane;envelope.Low.Z-40.0;envelope.High.Z+40.0]
+                        {request with Drive={request.Drive with Gears=gears}})
+        routes
+        |> List.distinctBy (fun route -> identity route.Drive)
+        |> List.filter (fun route ->
+            let gears = route.Drive.Gears |> List.filter (fun (body,_) -> body=route.Drive.Root) |> List.map snd
+            let walls = (gears |> List.collect (fun gear -> [gear.Position.Z-10.0;gear.Position.Z+10.0]))
+                        @ (WalkerPackaging.driveBearingPlanes route route.Drive.Root gears
+                           |> List.collect (fun plane -> [plane-10.0;plane+10.0]))
+            abs(motor.Position.X-root.Position.X)<1e-6 && abs(motor.Position.Y-root.Position.Y)<1e-6
+            && WalkerPackaging.motorOutputAllows motor (List.min walls) (List.max walls)
+            && WalkerMotionSpace.fitsFixed [motor] (route.Drive.Gears |> List.map snd))
+        |> List.sortBy (fun route ->
+            not(legacy |> List.exists (fun original -> original.Drive=route.Drive)),
+            route.Drive.Gears |> List.sumBy (fun (_,gear) -> WalkerClearance.initialOverlapRisk motor gear),
+            abs((route.Drive.Gears |> List.find (fun (body,_) -> body=route.Drive.Root) |> snd).Position.Z-root.Position.Z))
 
     let start request oracleScope maximumStates maximumFrontier =
         WalkerPackaging.validate request |> Result.defaultWith (Realization.json >> invalidArg "request")
         ConstructionSearch.create (scope request oracleScope) (goals request) maximumStates maximumFrontier
+
+    let estimatedCenter (request: WalkerPackagingRequest) (targets: WalkerComponentTarget list) =
+        request.Balance |> Option.map (fun model ->
+            model.Components |> List.fold (fun center mass ->
+                let original = request.Source.Bodies |> List.collect _.Parts |> List.find (fun p -> p.Id=mass.Part)
+                let selected = targets |> List.find (fun t -> t.Placement.Id=mass.Part) |> _.Placement
+                let offset = Vec3.subtract mass.CenterLdu original.Position
+                let local = Vec3.create (Vec3.dot offset original.Rotation.X)
+                                       (Vec3.dot offset original.Rotation.Y) (Vec3.dot offset original.Rotation.Z)
+                let moved = Vec3.add selected.Position (Rotation.apply selected.Rotation local)
+                Vec3.add center (Vec3.scale (mass.MassKg/model.TotalMassKg) (Vec3.subtract moved mass.CenterLdu)))
+                model.CenterOfMassLdu)
+
+    let balanceScore request targets =
+        match request.Balance,estimatedCenter request targets with
+        | Some model,Some center ->
+            let x = (center.X-model.SupportCenterLdu.X)/model.SupportHalfSpanLdu.X
+            let z = (center.Z-model.SupportCenterLdu.Z)/model.SupportHalfSpanLdu.Z
+            x*x+z*z
+        | _ -> 0.0
 
     let motionTargetOptionsObserved inspect (request: WalkerPackagingRequest) (screened: ScreenedMotion) =
         let walking = {request with Drive={request.Drive with Gears=[]}}
@@ -308,17 +373,45 @@ module WalkerConstructionTheory =
                         |> List.sortBy (fun t -> Vec3.distance t.Placement.Position target.Placement.Position,t.Placement.Position)
                 variants |> List.distinct
                 |> List.filter fits
-                |> List.truncate (if target.Placement.Id=request.Source.MotorPart then 5 else 12)
+                |> List.truncate (if target.Placement.Id=request.Source.MotorPart then 9 else 12)
                 |> List.indexed)
             let combinations = choices |> List.fold (fun combinations variants ->
                 [for cost,chosen in combinations do
                     for index,target in variants do yield cost+index,chosen @ [target]]) [0,[]]
-            combinations |> List.filter (fun (_,targets) ->
-                targets |> List.forall (fun target ->
-                    WalkerMotionSpace.fitsFixed [target.Placement]
-                        (targets |> List.filter (fun other -> other.Placement.Id<>target.Placement.Id) |> List.map _.Placement)))
-            |> List.sortBy (fun (cost,targets) -> cost,Realization.json targets)
-            |> List.truncate 32 |> List.map snd)
+            let corrected =
+                match request.Balance with
+                | None -> []
+                | Some model ->
+                    let battery = model.Components |> List.find (fun c -> c.Part="payload-battery")
+                    combinations |> List.collect (fun (cost,targets) ->
+                        let current = estimatedCenter request targets |> Option.get
+                        let selected = targets |> List.find (fun t -> t.Placement.Id=battery.Part)
+                        let desired = Vec3.add selected.Placement.Position
+                                        (Vec3.scale (model.TotalMassKg/battery.MassKg) (Vec3.subtract model.SupportCenterLdu current))
+                        let nominal = request.Targets |> List.find (fun t -> t.Placement.Id=battery.Part)
+                        let clamp value center tolerance = max (center-tolerance) (min (center+tolerance) value)
+                        let x = clamp desired.X nominal.Placement.Position.X nominal.ToleranceLdu.X
+                        let z = clamp desired.Z nominal.Placement.Position.Z nominal.ToleranceLdu.Z
+                        [for dx in [-20.0;0.0;20.0] do
+                            for dz in [-20.0;0.0;20.0] do
+                                let position = {selected.Placement.Position with
+                                                    X=clamp (Math.Round(x/20.0)*20.0+dx) nominal.Placement.Position.X nominal.ToleranceLdu.X
+                                                    Z=clamp (Math.Round(z/20.0)*20.0+dz) nominal.Placement.Position.Z nominal.ToleranceLdu.Z}
+                                yield {selected with Placement={selected.Placement with Position=position}}]
+                        |> List.distinct |> List.filter fits |> List.map (fun candidate ->
+                            cost,targets |> List.map (fun target -> if target.Placement.Id=battery.Part then candidate else target)))
+            let rank (cost,targets) = balanceScore request targets,cost,Realization.json targets
+            let ranked =
+                combinations @ corrected |> List.distinctBy (snd >> Realization.json) |> List.filter (fun (_,targets) ->
+                    targets |> List.forall (fun target ->
+                        WalkerMotionSpace.fitsFixed [target.Placement]
+                            (targets |> List.filter (fun other -> other.Placement.Id<>target.Placement.Id) |> List.map _.Placement)))
+                |> List.sortBy rank
+            let reserved = ranked |> List.distinctBy (fun (_,targets) ->
+                targets |> List.find (fun t -> t.Placement.Id=request.Source.MotorPart) |> _.Placement)
+            let others = ranked |> List.filter (fun entry -> not(List.contains entry reserved))
+                               |> List.truncate (32-reserved.Length)
+            reserved @ others |> List.sortBy rank |> List.map snd)
 
     let motionTargetOptions request screened = motionTargetOptionsObserved None request screened
 
@@ -332,6 +425,7 @@ module WalkerConstructionTheory =
         let routeCache = Dictionary<string,(WalkerPlacement list * WalkerPlacement list) list>()
         let spaceCache = Dictionary<string,Result<WalkerMotionSpace.Space,GateDecision>>()
         let targetCache = Dictionary<string,Result<WalkerComponentTarget list list,GateDecision>>()
+        let driveCache = Dictionary<string,WalkerPackagingRequest list>()
         let buildCache = Dictionary<string,Result<WalkerPackagingConstruction,GateDecision>>()
         let frame,remove = WalkerPackaging.scaffold request
         let ground = request.Program.Bodies |> List.find _.Grounded |> _.Id
@@ -350,18 +444,9 @@ module WalkerConstructionTheory =
         let repairsMemo = Dictionary<string,WalkerGenome list>()
         let expand (proof: ConstructionProof) (nogoods: ConstructionNogood list) =
             if proof.Scope<>expectedScope then invalidArg "checkpoint" "Construction request/oracle scope changed."
-            let routes = driveOptions request
             let selectedDrive = proof.Steps |> List.tryFind (fun s -> s.Goal="drive")
-            let selected = selectedDrive |> Option.map (fun step ->
-                routes |> List.tryFind (fun route -> identity route.Drive=step.Choice)
-                |> Option.defaultWith (fun () -> invalidArg "checkpoint" "Unknown drive-plane production."))
-            let baseGoals = rootGoals @ (selected |> Option.map detailGoals |> Option.defaultValue [])
-            let additional = proof.Steps |> List.collect (fun step ->
-                if baseGoals |> List.exists (fun g -> g.Id=step.Goal && g.Kind="mount-and-bearing") then
-                    additionalBeamGoals step.Goal step.Parts
-                else [])
-            let expectedGoals = baseGoals @ additional
-            if proof.Goals<>expectedGoals then invalidArg "checkpoint" "Construction obligations differ from the frozen theory."
+            if selectedDrive.IsNone && proof.Goals<>rootGoals then
+                invalidArg "checkpoint" "Construction obligations differ from the frozen theory."
             ConstructionSearch.validate proof |> ignore
             let cacheKey = identity (ConstructionSearch.nodeId proof,nogoods)
             match memo.TryGetValue cacheKey with
@@ -413,11 +498,27 @@ module WalkerConstructionTheory =
                                                   Diagnostics=["No bounded stock-envelope target assignment avoids the complete reserved gait."]})
                          | Ok placements -> resolve proof byGoal["targets"] "place-components-outside-reserved-gait" placements)
                         |> Result.bind (fun targets ->
+                            let key = identity(source,targets)
+                            let routes =
+                                match driveCache.TryGetValue key with
+                                | true,routes -> routes
+                                | _ ->
+                                    let routes = motorDriveOptions {request with Source=source;Targets=targets}
+                                    driveCache.Add(key,routes)
+                                    routes
                             let alternatives = routes |> List.mapi (fun index route ->
                                 {Key=identity route.Drive;Parts=route.Drive.Gears |> List.map snd;Bodies=Set.toList driveBodies
                                  Cost=float index;Value=route;Introduces=detailGoals route;Bonds=[]})
                             resolve proof byGoal["drive"] "required-spur-drive-with-optional-compound-output-planes" alternatives
-                            |> Result.map (fun route -> source,{route with Targets=targets})))
+                            |> Result.map (fun route ->
+                                let baseGoals = rootGoals @ detailGoals route
+                                let additional = proof.Steps |> List.collect (fun step ->
+                                    if baseGoals |> List.exists (fun g -> g.Id=step.Goal && g.Kind="mount-and-bearing") then
+                                        additionalBeamGoals step.Goal step.Parts
+                                    else [])
+                                if proof.Goals<>baseGoals @ additional then
+                                    invalidArg "checkpoint" "Construction obligations differ from the frozen theory."
+                                source,route)))
                     |> Result.bind (fun (source,route) ->
                         let mutable unresolved = None
                         let mutable replayed = Set.ofList ["frame";"walking";"targets";"drive"]

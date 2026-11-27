@@ -22,7 +22,7 @@ class Proposals:
         self.siblings = siblings
         self.calls = []
 
-    def build_native(self, parent, output, *, layers=1, placements=None, seen_requests=()):
+    def build_native(self, parent, output, *, layers=1, placements=None, seen_requests=(), balance_model=None):
         output.mkdir(parents=True)
         shutil.copytree(parent, output / "candidate-001")
         data = load_manifest(parent / "manifest.json")

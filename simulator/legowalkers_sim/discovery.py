@@ -78,8 +78,10 @@ POLICY = {
     "construction": {"version": "technic-construction-v11",
                      "motionFirstBuilder": {
                          "version": "sampled-motion-ground-reservation-v2",
-                         "theoryVersion": "walker-construction-theory-v22",
-                         "packagingVersion": "packaging-realization-v19",
+                         "theoryVersion": "walker-construction-theory-v24",
+                         "packagingVersion": "packaging-realization-v21",
+                         "balance": "Prefer joint motor/battery/receiver layouts with smaller normalized source-mass COM offsets from swept-foot bounds before support routing; not dynamic qualification.",
+                         "motorPlacement": "Coupled housing-centered/inward/outward axial placement and input-mesh plane routing; up to nine motor placements with one target assignment reserved per feasible placement.",
                          "motorMountMotifs": ["front-forward", "front-rearward", "rear-saddle"],
                          "fixedHardware": "Support parts must also clear fixed motor/payload stock envelopes; coaxial connector engagement remains permitted.",
                          "routing": "Reject unsafe bridge extensions before recursing, so obstructed prefixes cannot consume the complete-route candidate cap.",

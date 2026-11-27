@@ -35,7 +35,7 @@ module WalkerPackagingTests =
                          else p
                      {Placement=placed;ToleranceLdu=Vec3.zero})
          Drive={Root=program.Motor.Body;Gears=gears;Axles=axles;MotorClockScale=1.0;InternalCompoundBearings=false}
-         ObsoletePartIds=removed;GroundClearance=None;FootConstructionGates=[]}
+         ObsoletePartIds=removed;GroundClearance=None;FootConstructionGates=[];Balance=None}
 
     [<Fact>]
     let ``route inspection exposes constraint geometry while preserving bounded search`` () =
@@ -160,12 +160,14 @@ module WalkerPackagingTests =
         let reducedRoot = reduced.Drive.Gears |> List.find (fun (body,_) -> body=edge.Input) |> snd
         Assert.Equal("3647.dat",reducedRoot.Part)
         Assert.Equal(root.Position.Z+80.0,reducedRoot.Position.Z)
-        let routes = WalkerConstructionTheory.driveOptions reduced
+        let routes = WalkerConstructionTheory.driveOptions reduced @ WalkerConstructionTheory.motorDriveOptions reduced
+                     |> List.distinctBy (fun route -> route.Drive)
         Assert.NotEmpty routes
         for route in routes do
+            let root = route.Drive.Gears |> List.find (fun (body,_) -> body=edge.Input) |> snd
             let output = route.Drive.Gears |> List.filter (fun (body,_) -> body=edge.Output) |> List.map snd
             for gear in output do
-                Assert.Equal((if abs(gear.Position.Z-reducedRoot.Position.Z)<1e-6 then "3649.dat" else "3648b.dat"),gear.Part)
+                Assert.Equal((if abs(gear.Position.Z-root.Position.Z)<1e-6 then "3649.dat" else "3648b.dat"),gear.Part)
             for transmission in route.Program.Transmissions do
                 let pairs = [for bodyA,a in route.Drive.Gears do
                                 for bodyB,b in route.Drive.Gears do
@@ -175,7 +177,7 @@ module WalkerPackagingTests =
         Assert.Throws<System.ArgumentException>(fun () -> WalkerConstructionTheory.withMotorReduction 5 reduced |> ignore) |> ignore
 
     [<Fact>]
-    let ``motor setback stays within tolerance and separates both housing and side bracket from gears`` () =
+    let ``axial motor alternatives respect tolerance and retain the original placement`` () =
         let request = fixture ()
         let motor = request.Targets |> List.find (fun t -> t.Placement.Id=request.Source.MotorPart)
         let placement = {motor.Placement with
@@ -191,9 +193,9 @@ module WalkerPackagingTests =
         let request = {request with Targets=request.Targets |> List.map (fun t ->
                                         if t.Placement.Id=motor.Placement.Id then {t with ToleranceLdu=Vec3.create 0 0 60} else t)}
         let options = WalkerConstructionTheory.targetOptions request
-        let best = options.Head |> List.find (fun t -> t.Placement.Id=motor.Placement.Id)
-        Assert.Equal(Vec3.create 0 0 60,best.Placement.Position)
-        Assert.True(abs(best.Placement.Position.Z+10.0-100.0)>=30.0)
+        Assert.Contains(options,fun targets ->
+            (targets |> List.find (fun t -> t.Placement.Id=motor.Placement.Id)).Placement.Position=Vec3.create 0 0 60)
+        Assert.Contains(request.Targets,options)
         for targets in options do
             for target in targets do
                 let original = request.Targets |> List.find (fun t -> t.Placement.Id=target.Placement.Id)
@@ -202,6 +204,168 @@ module WalkerPackagingTests =
                 Assert.True(abs(target.Placement.Position.Z-original.Placement.Position.Z)<=original.ToleranceLdu.Z)
                 Assert.Equal(original.Placement.Rotation,target.Placement.Rotation)
         Assert.Equal(100.0,(request.Drive.Gears |> List.find (fun (body,_) -> body=request.Drive.Root) |> snd).Position.Z)
+
+    [<Theory>]
+    [<InlineData(1.0)>]
+    [<InlineData(-1.0)>]
+    let ``centered motor placement reroutes its mesh without changing shaft centers ratios or walking motion`` face =
+        let request = fixture ()
+        let motor = request.Targets |> List.find (fun t -> t.Placement.Id=request.Source.MotorPart)
+        let placement = {motor.Placement with
+                            Position={motor.Placement.Position with Z=if face>0.0 then 150.0 else -30.0}
+                            Rotation={X=Vec3.create face 0 0;Y=Vec3.create 0 1 0;Z=Vec3.create 0 0 face}}
+        let targets = request.Targets |> List.map (fun t ->
+            if t.Placement.Id=motor.Placement.Id then {t with Placement=placement;ToleranceLdu=Vec3.create 0 0 240} else t)
+        let request = {request with Targets=targets}
+        let center = request.Source.Feet |> List.averageBy _.Depth
+        let centered = WalkerConstructionTheory.targetOptions request |> List.head
+        let selected = centered |> List.find (fun t -> t.Placement.Id=motor.Placement.Id) |> _.Placement
+        let bounds = WalkerMotionSpace.partEnvelope selected
+        Assert.Equal(center,(bounds.Low.Z+bounds.High.Z)/2.0,6)
+        Assert.Equal(placement.Rotation,selected.Rotation)
+        Assert.Contains(request.Targets,WalkerConstructionTheory.targetOptions request)
+        let routes = WalkerConstructionTheory.motorDriveOptions {request with Targets=centered}
+        Assert.NotEmpty routes
+        for route in routes do
+            Assert.Equal(request.Reference,route.Reference)
+            Assert.Equal(request.Program,route.Program)
+            Assert.Equal(request.Source,route.Source)
+            Assert.Equal(request.Drive.MotorClockScale,route.Drive.MotorClockScale)
+            for body,gear in route.Drive.Gears do
+                let old = request.Drive.Gears |> List.find (fun (id,_) -> id=body) |> snd
+                Assert.Equal(old.Position.X,gear.Position.X)
+                Assert.Equal(old.Position.Y,gear.Position.Y)
+            for edge in route.Program.Transmissions do
+                let meshes = [for a,gearA in route.Drive.Gears do
+                                  for b,gearB in route.Drive.Gears do
+                                      if a=edge.Input && b=edge.Output
+                                         && Catalog.matchesSpurMesh edge.Ratio gearA.Part gearA.Position gearB.Part gearB.Position then
+                                          yield gearA,gearB]
+                Assert.Single meshes |> ignore
+            let root = route.Drive.Gears |> List.find (fun (body,_) -> body=route.Drive.Root) |> snd
+            let original = request.Drive.Gears |> List.find (fun (body,_) -> body=request.Drive.Root) |> snd
+            Assert.NotEqual(original.Position.Z,root.Position.Z)
+            let bearings = WalkerPackaging.bearingPlanes route.Drive.InternalCompoundBearings [root]
+            Assert.All(bearings,fun plane ->
+                if face>0.0 then Assert.True(plane+10.0<=selected.Position.Z+20.0+1e-6)
+                else Assert.True(plane-10.0>=selected.Position.Z-20.0-1e-6))
+        let boundedTargets = request.Targets |> List.map (fun t ->
+            if t.Placement.Id=motor.Placement.Id then {t with ToleranceLdu=Vec3.create 0 0 80} else t)
+        let bounded = {request with Targets=boundedTargets}
+        Assert.DoesNotContain(WalkerConstructionTheory.targetOptions bounded,fun targets ->
+            (targets |> List.find (fun t -> t.Placement.Id=motor.Placement.Id)).Placement.Position=selected.Position)
+
+    let private forwardFrame (request: WalkerPackagingRequest) =
+        let bodies = request.Source.Bodies |> List.map (fun body ->
+            if not(request.Program.Bodies |> List.exists (fun b -> b.Id=body.Body && b.Grounded)) then body
+            else
+                let parts = body.Parts |> List.map (fun p ->
+                    if request.Targets |> List.exists (fun t -> t.Placement.Id=p.Id) then p
+                    else {p with Position={p.Position with X=if p.Id="bridge-0" then 110.0 else p.Position.X+120.0}})
+                {body with Parts=parts})
+        {request with Source={request.Source with Bodies=bodies}}
+
+    [<Fact>]
+    let ``bounded target assignments retain centered and nominal motor branches despite payload combinations`` () =
+        let request = fixture () |> forwardFrame
+        let targets = request.Targets |> List.map (fun t ->
+            {t with ToleranceLdu=if t.Placement.Id=request.Source.MotorPart then Vec3.create 0 0 240 else Vec3.create 240 240 240})
+        let request = {request with Targets=targets}
+        let screened = Realization.screen request.Program 72 |> Result.defaultWith (Realization.json >> failwith)
+        let options = WalkerConstructionTheory.motionTargetOptions request screened |> Result.defaultWith (Realization.json >> failwith)
+        let motor (targets: WalkerComponentTarget list) =
+            targets |> List.find (fun t -> t.Placement.Id=request.Source.MotorPart) |> _.Placement
+        Assert.InRange(options.Length,2,32)
+        Assert.Contains(options,fun targets -> motor targets=motor request.Targets)
+        let center = request.Source.Feet |> List.averageBy _.Depth
+        Assert.Contains(options,fun targets ->
+            let bounds = motor targets |> WalkerMotionSpace.partEnvelope
+            abs((bounds.Low.Z+bounds.High.Z)/2.0-center)<1e-6)
+        Assert.True((options |> List.map motor |> List.distinct).Length>=5)
+
+    [<Fact>]
+    let ``centered motor branch selects a compatible drive before mounting and support search`` () =
+        let request = fixture () |> forwardFrame
+        let targets = request.Targets |> List.map (fun t ->
+            if t.Placement.Id=request.Source.MotorPart then {t with ToleranceLdu=Vec3.create 0 0 240} else t)
+        let request = {request with Targets=WalkerConstructionTheory.targetOptions {request with Targets=targets} |> List.head}
+        let request = {request with Targets=request.Targets |> List.map (fun t -> {t with ToleranceLdu=Vec3.zero})}
+        let initial = WalkerConstructionTheory.start request "centered-motor" 512 64
+        let expand = WalkerConstructionTheory.expansion request "centered-motor"
+        let mutable proof = initial.Frontier.Head
+        for expected in ["frame";"walking";"targets";"drive"] do
+            match expand proof [] with
+            | Branch(goal,choices) ->
+                Assert.Equal(expected,goal)
+                Assert.NotEmpty choices
+                proof <- ConstructionSearch.apply proof choices.Head
+            | other -> failwith (Realization.json other)
+        let selected = proof.Steps |> List.find (fun step -> step.Goal="drive")
+        let routes = WalkerConstructionTheory.motorDriveOptions request
+        Assert.Contains(routes,fun route -> Export.sha256(Realization.json route.Drive)=selected.Choice)
+        match expand proof [] with
+        | Branch("motor-mount",choices) -> Assert.NotEmpty choices
+        | other -> failwith (Realization.json other)
+        Assert.Contains(ConstructionSearch.openGoals proof,fun goal -> goal.Id="oracle" && goal.External)
+
+    [<Fact>]
+    let ``centered motor cannot bypass retained frame and walking stock`` () =
+        let request = fixture ()
+        let targets = request.Targets |> List.map (fun t ->
+            if t.Placement.Id=request.Source.MotorPart then {t with ToleranceLdu=Vec3.create 0 0 240} else t)
+        let request = {request with Targets=targets}
+        let centered = WalkerConstructionTheory.targetOptions request |> List.head
+        let motor = centered |> List.find (fun t -> t.Placement.Id=request.Source.MotorPart) |> _.Placement
+        let conflicts = ResizeArray<WalkerMotionSpace.Conflict>()
+        let inspect produce =
+            let inspection: WalkerConstructionInspection = produce ()
+            if inspection.Candidate |> List.exists (fun box ->
+                box.Part=motor.Id && box.Low=(WalkerMotionSpace.partEnvelope motor).Low) then
+                conflicts.AddRange inspection.Conflicts
+        let screened = Realization.screen request.Program 72 |> Result.defaultWith (Realization.json >> failwith)
+        let options = WalkerConstructionTheory.motionTargetOptionsObserved (Some inspect) request screened
+                      |> Result.defaultWith (Realization.json >> failwith)
+        Assert.DoesNotContain(options,fun targets ->
+            (targets |> List.find (fun t -> t.Placement.Id=motor.Id)).Placement=motor)
+        Assert.Contains(conflicts,fun conflict -> conflict.Body="fixed-hardware")
+
+    [<Fact>]
+    let ``balance ranks joint layouts before support routing and corrects battery for moved motor and receiver`` () =
+        let request = fixture () |> forwardFrame
+        let targets = request.Targets |> List.map (fun t ->
+            {t with ToleranceLdu=if t.Placement.Id=request.Source.MotorPart then Vec3.create 0 0 240 else Vec3.create 240 240 240})
+        let model =
+            {TotalMassKg=0.5;CenterOfMassLdu=Vec3.create 80 -50 100
+             SupportCenterLdu=Vec3.create 180 -50 60;SupportHalfSpanLdu=Vec3.create 150 0 100
+             Components=request.Targets |> List.map (fun t ->
+                let mass = if t.Placement.Id="payload-battery" then 0.2 elif t.Placement.Id=request.Source.MotorPart then 0.06 else 0.025
+                let original = request.Source.Bodies |> List.collect _.Parts |> List.find (fun p -> p.Id=t.Placement.Id)
+                {Part=t.Placement.Id;MassKg=mass;CenterLdu=original.Position})}
+        let request = {request with Targets=targets;Balance=Some model}
+        let screened = Realization.screen request.Program 72 |> Result.defaultWith (Realization.json >> failwith)
+        let legacy = WalkerConstructionTheory.motionTargetOptions {request with Balance=None} screened
+                     |> Result.defaultWith (Realization.json >> failwith)
+        let ranked = WalkerConstructionTheory.motionTargetOptions request screened |> Result.defaultWith (Realization.json >> failwith)
+        Assert.InRange(ranked.Length,1,32)
+        let first = WalkerConstructionTheory.balanceScore request ranked.Head
+        Assert.True(first<WalkerConstructionTheory.balanceScore request legacy.Head*0.5)
+        Assert.All(ranked,fun targets -> Assert.True(first<=WalkerConstructionTheory.balanceScore request targets+1e-9))
+        let positions =
+            request.Targets |> List.map (fun t ->
+                let delta = if t.Placement.Id=request.Source.MotorPart then Vec3.create 0 0 20
+                            elif t.Placement.Id="payload-receiver" then Vec3.create 20 0 0 else Vec3.zero
+                {t with Placement={t.Placement with Position=Vec3.add t.Placement.Position delta}})
+        let baseline = WalkerConstructionTheory.estimatedCenter request request.Targets |> Option.get
+        let center = WalkerConstructionTheory.estimatedCenter request positions |> Option.get
+        Assert.Equal(baseline.X+0.025/0.5*20.0,center.X,6)
+        Assert.Equal(baseline.Z+0.06/0.5*20.0,center.Z,6)
+        Assert.NotEqual<string>(WalkerConstructionTheory.scope request "balance",WalkerConstructionTheory.scope {request with Balance=None} "balance")
+        let invalid = {model with TotalMassKg=0.1}
+        Assert.Equal("invalid-balance-model",(WalkerPackaging.realize {request with Balance=Some invalid} 1).Head.Gates.Head.Code)
+        for invalid in [Unchecked.defaultof<WalkerBalanceModel>
+                        {model with Components=Unchecked.defaultof<_>}
+                        {model with Components=Unchecked.defaultof<_>::model.Components.Tail}] do
+            Assert.Equal("invalid-balance-model",(WalkerPackaging.realize {request with Balance=Some invalid} 1).Head.Gates.Head.Code)
 
     [<Fact>]
     let ``shifted motor mount bonds refer to the selected placement rather than nominal targets`` () =

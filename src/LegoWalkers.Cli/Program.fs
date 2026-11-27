@@ -12,6 +12,7 @@ let usage = """LegoWalkers: constrained Technic mechanism compiler
            [--phase 0..3] [--seed INT]
   sweep    --output DIR [--limit 1..32] [--seed INT]
   catalog
+  construction-policy
   propose --pairs 1..3 --variant wired|remote --towing yes|no --seed INT [--attempt INT] [--parent JSON]
   motion --output DIR [--example four-bar|walker1|jansen | --program JSON] [--steps 36..3600] [--turns 1..32]
   motion-gallery --output DIR
@@ -31,6 +32,7 @@ let usage = """LegoWalkers: constrained Technic mechanism compiler
                [--target-placements JSON] [--ground-clearance-ldu NUMBER]
                [--max-roll-degrees NUMBER] [--max-pitch-degrees NUMBER]
                [--seen-requests JSON-ARRAY-OF-SCOPED-REQUEST-IDS]
+               [--balance-model JSON-FILE]
     Ground options also apply to construct-walker without --feedback.
     Defaults: paired plates, 8 LDU non-foot clearance, upright nominal attitude.
     Writes throttled live proof/envelope snapshots and a recorded search-event stream.
@@ -148,6 +150,15 @@ let buildWalker options =
                     MaximumRollRadians=number "--max-roll-degrees" 0.0*Math.PI/180.0
                     MaximumPitchRadians=number "--max-pitch-degrees" 0.0*Math.PI/180.0}
     let request = {request with GroundClearance=Some ground}
+    let request =
+        match Map.tryFind "--balance-model" options with
+        | None -> request
+        | Some path ->
+            let jsonOptions = System.Text.Json.JsonSerializerOptions(
+                PropertyNamingPolicy=System.Text.Json.JsonNamingPolicy.CamelCase,
+                UnmappedMemberHandling=System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)
+            let model = System.Text.Json.JsonSerializer.Deserialize<WalkerBalanceModel>(File.ReadAllText path,jsonOptions)
+            {request with Balance=Some model}
     let directory = output options
     WalkerBuilder.write directory policy
     File.WriteAllText(Path.Combine(directory,"request.json"),Realization.json request+"\n")
@@ -270,6 +281,12 @@ let main argv =
             for KeyValue(id, spec) in Catalog.parts do
                 printfn "%-14s %-24s %d mechanical ports" id
                     (match spec.Connector with Some c -> string c | None -> "structural") spec.Ports.Length
+            0
+        | ["construction-policy"] ->
+            printfn "%s" (Realization.json {|
+                theoryVersion=WalkerConstructionTheory.version
+                packagingVersion=WalkerPackaging.version
+            |})
             0
         | "builder-catalogue" :: args ->
             let options = parseOptions (Set.ofList ["--builder-policy"]) args
@@ -525,7 +542,7 @@ let main argv =
             0
         | command :: args when command="build-walker" || (command="construct-walker" && not(List.contains "--feedback" args)) ->
             let options = parseOptions (Set.ofList ["--parent";"--output";"--builder-policy";"--limit";"--steps";
-                                                   "--foot-policy";"--foot-layers";"--target-placements";"--seen-requests";"--ground-clearance-ldu";"--max-roll-degrees";"--max-pitch-degrees"]) args
+                                                   "--foot-policy";"--foot-layers";"--target-placements";"--seen-requests";"--balance-model";"--ground-clearance-ldu";"--max-roll-degrees";"--max-pitch-degrees"]) args
             buildWalker options
         | "construct-walker" :: args ->
             let options = parseOptions (Set.ofList ["--parent"; "--output"; "--feedback"; "--conflicts"; "--builder-policy"; "--limit"; "--steps"]) args

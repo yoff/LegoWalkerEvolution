@@ -21,6 +21,52 @@ def pending(archive):
         "SELECT c.*,b.design FROM native_candidates c JOIN births b ON b.id=c.birth WHERE c.birth=1").fetchone()
 
 
+def test_balance_model_uses_whole_robot_mass_and_support_bounds():
+    layout = {"totalMassKg": 0.5, "centerOfMassLdu": [100, -50, 80],
+              "sweptFootHullXZLdu": [[0, -100], [400, -100], [400, 200], [0, 200]],
+              "components": [{"partInstance": part, "massKg": mass, "centerLdu": center}
+                             for part, mass, center in [
+                                 ("motor", .06, [40, 0, 200]), ("payload-battery", .2, [500, -120, 40]),
+                                 ("payload-receiver", .025, [80, -80, 180])]]}
+    model = motion_carry._balance_model(layout)
+    assert model["supportCenterLdu"] == {"x": 200, "y": -50, "z": 50}
+    assert model["supportHalfSpanLdu"] == {"x": 200, "y": 0, "z": 150}
+    assert model["totalMassKg"] == .5 and model["centerOfMassLdu"] == {"x": 100, "y": -50, "z": 80}
+    assert model["components"][0]["massKg"] == .06
+    renamed = {**layout, "components": [
+        {**c, "partInstance": "input-motor"} if c["partInstance"] == "motor" else c
+        for c in layout["components"]]}
+    assert motion_carry._balance_model(renamed, "input-motor")["components"][0]["part"] == "input-motor"
+    with pytest.raises(AdapterError, match="Invalid source balance estimate"):
+        motion_carry._balance_model({**layout, "totalMassKg": .1})
+    with pytest.raises(AdapterError, match="degenerate"):
+        motion_carry._balance_model({**layout, "sweptFootHullXZLdu": [[0, 0], [100, 0]]})
+
+
+def test_balance_estimate_is_passed_into_each_constructor_alternative(tmp_path, monkeypatch):
+    source, _, archive, _ = setup_discovery(tmp_path, monkeypatch)
+    layout = {"totalMassKg": .5, "centerOfMassLdu": [100, -50, 80],
+              "sweptFootHullXZLdu": [[0, -100], [400, 200]],
+              "components": [{"partInstance": p, "massKg": m, "centerLdu": [0, 0, 0]}
+                             for p, m in [("motor", .06), ("payload-battery", .2), ("payload-receiver", .025)]]}
+    monkeypatch.setattr(motion_carry, "_centering", lambda *args: (
+        {"payload-battery": {"x": 200, "y": -120, "z": 40}}, layout))
+    models = []
+
+    def build(*args, balance_model, **kwargs):
+        models.append(json.loads(balance_model.read_text()))
+        return {"generated": [], "rejected": [], "gates": []}
+
+    monkeypatch.setattr(Proposals, "build_native", build)
+    try:
+        native_episode.stage_native(archive, source)
+        motion_carry.ensure_pending(archive, pending(archive), Proposals(), tmp_path)
+        assert len(models) == 4
+        assert all(model == motion_carry._balance_model(layout) for model in models)
+        assert archive.counts() == {}
+    finally:
+        archive.db.close()
+
 def test_same_genotype_construction_binds_new_proof_without_mutating_original_inputs(tmp_path, monkeypatch):
     source, _, archive, _ = setup_discovery(tmp_path, monkeypatch)
     try:
@@ -79,7 +125,7 @@ def test_effective_duplicate_requests_are_carried_between_alternatives(tmp_path,
     monkeypatch.setattr(motion_carry, "_centering", lambda *args: (
         {"payload-battery": {"x": 0, "y": 0, "z": 0}}, None))
 
-    def build(generator, parent, output, *, layers, placements, seen_requests):
+    def build(generator, parent, output, *, layers, placements, seen_requests, balance_model):
         output.mkdir()
         request_id = str(layers) * 64
         duplicate = request_id in seen_requests
@@ -177,13 +223,15 @@ def test_construction_timeout_is_recorded_without_spending_or_repeating_work(tmp
         archive.db.close()
 
 
-@pytest.mark.parametrize("change", ["reference", "clock", "speed", "proof"])
+@pytest.mark.parametrize("change", ["reference", "clock", "speed", "proof", "balance"])
 def test_generator_rejects_changed_intent_control_or_missing_construction_proof(tmp_path, monkeypatch, change):
     source, _ = native_fixture(tmp_path)
     parent = source / "candidate-0"
     output = tmp_path / "build"
     program = {"id": "retained-motion"}
     (parent / "program.json").write_text(json.dumps({"program": program}))
+    balance_file = tmp_path / "balance-model.json"
+    balance_file.write_text('{"totalMassKg": 0.5}')
 
     def run(*args, **kwargs):
         summary = Proposals().build_native(parent, output)
@@ -208,5 +256,6 @@ def test_generator_rejects_changed_intent_control_or_missing_construction_proof(
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr("legowalkers_sim.evolution.subprocess.run", run)
-    with pytest.raises(AdapterError, match="reference intent|electrical control|construction proof"):
-        Generator(Path("dotnet"), Path("generator.dll")).build_native(parent, output)
+    with pytest.raises(AdapterError, match="reference intent|electrical control|construction proof|balance estimate"):
+        Generator(Path("dotnet"), Path("generator.dll")).build_native(
+            parent, output, balance_model=balance_file if change == "balance" else None)

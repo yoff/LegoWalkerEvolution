@@ -533,7 +533,7 @@ class Generator:
             raise AdapterError("Native F# proposal returned an inconsistent mutation/rejection summary.")
         return summary
 
-    def build_native(self, parent, output, *, layers=1, placements=None, seen_requests=()):
+    def build_native(self, parent, output, *, layers=1, placements=None, seen_requests=(), balance_model=None):
         from .motion_carry import POLICY
 
         command = ["build-walker", "--parent", str(parent), "--output", str(output),
@@ -544,6 +544,8 @@ class Generator:
             command += ["--target-placements", str(placements)]
         if seen_requests:
             command += ["--seen-requests", json.dumps(list(seen_requests))]
+        if balance_model is not None:
+            command += ["--balance-model", str(balance_model)]
         result = subprocess.run([*self.command, *command], capture_output=True, text=True, timeout=600)
         summary_file = output / "candidates.json"
         if result.returncode not in (0, 1) or not summary_file.is_file():
@@ -564,6 +566,8 @@ class Generator:
         if (request["reference"] != program or request["drive"]["motorClockScale"] != 1
                 or request["groundClearance"]["minimumNonFootClearanceLdu"] != POLICY["groundClearanceLdu"]):
             raise AdapterError("Motion-first construction changed its reference intent, input clock or ground requirement.")
+        if balance_model is not None and request.get("balance") != json.loads(Path(balance_model).read_text()):
+            raise AdapterError("Motion-first construction changed or omitted the requested balance estimate.")
         source = json.loads((parent / "realization.json").read_text())
         for entry in summary["generated"]:
             candidate = output / entry["directory"]
@@ -628,7 +632,15 @@ class Generator:
 
 def protocol_definition(generator, library, options, profile):
     from .motor import definition as motor_definition
+    from .motion_carry import POLICY as construction_policy
     options.validate()
+    try:
+        compiled = json.loads(generator.invoke("construction-policy"))
+    except (AdapterError, json.JSONDecodeError) as error:
+        raise AdapterError("Compiler construction policy is invalid; rebuild the CLI before preparing runtime.") from error
+    if (not isinstance(compiled, dict)
+            or any(compiled.get(name) != construction_policy[name] for name in ("theoryVersion", "packagingVersion"))):
+        raise AdapterError("Compiler construction policy differs from current source; rebuild the CLI before preparing runtime.")
     catalog = [line.split()[0] for line in generator.invoke("catalog").splitlines()]
     sources = [*sorted((ROOT / "src/LegoWalkers.Core").glob("*.fs")),
                *[Path(__file__).with_name(name) for name in

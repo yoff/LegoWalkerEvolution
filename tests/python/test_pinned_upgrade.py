@@ -57,8 +57,9 @@ def test_joint_tree_changes_invalidate_scientific_and_screening_fingerprints(tmp
     from legowalkers_sim.evaluation import EvaluationOptions
     for name in ("LegoWalkers.Cli.dll", "LegoWalkers.Core.dll"):
         (tmp_path / name).write_bytes(b"fixture")
+    from legowalkers_sim.motion_carry import POLICY
     generator = SimpleNamespace(command=["dotnet", str(tmp_path / "LegoWalkers.Cli.dll")],
-                                invoke=lambda *args: "3001.dat")
+                                invoke=lambda command: json.dumps(POLICY) if command == "construction-policy" else "3001.dat")
     monkeypatch.setattr(evolution, "library_fingerprint", lambda *args: "fixture")
     original = evolution.protocol_definition(generator, tmp_path, EvaluationOptions(), {})
     original_screen = screening._protocol(False)
@@ -75,6 +76,20 @@ def test_joint_tree_changes_invalidate_scientific_and_screening_fingerprints(tmp
     assert updated["sourceSha256"][key] != original["sourceSha256"][key]
     assert screening._protocol(False)["sourceSha256"] != original_screen["sourceSha256"]
 
+
+@pytest.mark.parametrize("compiled", ['{"theoryVersion":"old","packagingVersion":"old"}', 'not-json', None])
+def test_runtime_preparation_rejects_stale_or_invalid_compiler_policy_before_reading_inputs(tmp_path, compiled):
+    from legowalkers_sim.evolution import protocol_definition
+    from legowalkers_sim.evaluation import EvaluationOptions
+
+    def invoke(command):
+        assert command == "construction-policy"
+        if compiled is None:
+            raise AdapterError("Unknown command: construction-policy")
+        return compiled
+
+    with pytest.raises(AdapterError, match="rebuild the CLI"):
+        protocol_definition(SimpleNamespace(invoke=invoke), tmp_path, EvaluationOptions(), {})
 
 def test_upgrade_preserves_source_authorization_and_records_cross_archive_parents(tmp_path):
     source, data = native_fixture(tmp_path)

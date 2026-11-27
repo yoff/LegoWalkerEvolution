@@ -12,13 +12,15 @@ from .mass_layout import mass_layout_gate
 from .payload import load_profile
 
 POLICY = {
-    "version": "motion-first-carry-forward-v2",
+    "version": "motion-first-carry-forward-v4",
     "samples": 96, "groundClearanceLdu": 8,
-    "packagingVersion": "packaging-realization-v19",
-    "theoryVersion": "walker-construction-theory-v22",
+    "packagingVersion": "packaging-realization-v21",
+    "theoryVersion": "walker-construction-theory-v24",
     "maximumBuildAttempts": 4, "plateLayers": [1, 2],
     "preserves": "Reference walking motion and electrical control; old physical stock is realization advice.",
     "placement": "Try estimated CoM centering at fixed leg mounts, then inherited placement preferences; all new routes remain mandatory.",
+    "motorPlacement": "Try housing-centered and bounded inward/outward axial positions with compatible input-mesh planes; retain the nominal placement as a search alternative.",
+    "balance": "Rank joint hardware layouts by normalized estimated whole-robot horizontal COM offset before routing. Correct battery placement for each motor/receiver alternative; source mass and swept-foot bounds are heuristic, never qualification.",
     "deduplication": "Effective request identities include the full request and frozen theory/oracle scope; an identical request is never searched twice within an obligation.",
     "inertia": "Estimated diagnostics, not a universal smaller/larger reward.",
     "repairs": "Existing exact-screening feedback, repair depth and proposal/reconstruction limits remain in force.",
@@ -72,6 +74,42 @@ def _centering(parent, library, profile):
     return {"payload-battery": position}, layout
 
 
+def _balance_model(layout, motor_part="motor"):
+    try:
+        total = layout["totalMassKg"]
+        center = np.asarray(layout["centerOfMassLdu"], dtype=float)
+        hull = np.asarray(layout["sweptFootHullXZLdu"], dtype=float)
+        components = layout["components"]
+        if (not np.isfinite(total) or total <= 0 or center.shape != (3,)
+                or not np.isfinite(center).all() or hull.ndim != 2 or hull.shape[1] != 2
+                or not len(hull) or not np.isfinite(hull).all()):
+            raise ValueError("non-finite mass/center or invalid swept-foot bounds")
+        lower, upper = hull.min(axis=0), hull.max(axis=0)
+        span = (upper-lower)/2
+        if (span <= 0).any():
+            raise ValueError("degenerate horizontal support bounds")
+        required = {motor_part, "payload-battery", "payload-receiver"}
+        selected = [component for component in components if component["partInstance"] in required]
+        if len(selected) != 3 or {c["partInstance"] for c in selected} != required:
+            raise ValueError("missing or duplicate hardware masses")
+        for component in selected:
+            point = np.asarray(component["centerLdu"], dtype=float)
+            if (not np.isfinite(component["massKg"]) or component["massKg"] <= 0
+                    or point.shape != (3,) or not np.isfinite(point).all()):
+                raise ValueError("invalid component mass or center")
+        if sum(c["massKg"] for c in selected) > total + 1e-9:
+            raise ValueError("hardware masses exceed total mass")
+        point = lambda values: dict(zip(("x", "y", "z"), map(float, values)))
+        support = (lower+upper)/2
+        return {"totalMassKg": float(total), "centerOfMassLdu": point(center),
+                "supportCenterLdu": point([support[0], center[1], support[1]]),
+                "supportHalfSpanLdu": point([span[0], 0, span[1]]),
+                "components": [{"part": c["partInstance"], "massKg": c["massKg"],
+                                "centerLdu": point(c["centerLdu"])} for c in selected]}
+    except (KeyError, TypeError, ValueError) as error:
+        raise AdapterError(f"Invalid source balance estimate: {error}") from error
+
+
 def rebuild(parent, output, generator, library, payload_profile=None, *, preserve_layout=False, observer=None):
     parent, output = Path(parent).resolve(), Path(output).resolve()
     manifest = load_manifest(parent / "manifest.json")
@@ -103,6 +141,11 @@ def rebuild(parent, output, generator, library, payload_profile=None, *, preserv
             diagnostics.append(f"Source mass-centering estimate unavailable: {error}. Construction still requires fresh exact validation.")
     if layout is not None:
         write_json(output / "source-mass-layout.json", layout)
+    balance_file = None
+    if layout is not None:
+        balance_file = output / "balance-model.json"
+        motor_part = json.loads((parent / "realization.json").read_text())["motorPart"]
+        write_json(balance_file, _balance_model(layout, motor_part))
     hint_file = output / "target-placements.json"
     if hints is not None:
         write_json(hint_file, hints)
@@ -118,7 +161,7 @@ def rebuild(parent, output, generator, library, payload_profile=None, *, preserv
                          "Identical effective requests are skipped.")
             try:
                 summary = generator.build_native(parent, folder, layers=layers, placements=placements,
-                                                 seen_requests=seen_requests)
+                                                 seen_requests=seen_requests, balance_model=balance_file)
             except subprocess.TimeoutExpired as error:
                 message = "Bounded motion construction timed out; partial output is preserved and inherited hardware is not substituted."
                 attempts.append({"directory": folder.name, "layers": layers,

@@ -28,6 +28,7 @@ type WalkerBalanceModel = {
     SupportCenterLdu: Vec3
     SupportHalfSpanLdu: Vec3
     Components: WalkerComponentMass list
+    ScaffoldComponents: WalkerComponentMass list option
 }
 
 type WalkerPackagingRequest = {
@@ -71,7 +72,7 @@ type WalkerConstructionInspection = {
 }
 
 module WalkerPackaging =
-    let version = "packaging-realization-v21"
+    let version = "packaging-realization-v27"
     let maximumAttempts = 2
     let maximumAnchorChoices = 64
     let private zAxis = Vec3.create 0 0 1
@@ -142,7 +143,7 @@ module WalkerPackaging =
             let rotation = {X=axis;Y=y;Z=Vec3.cross axis y}
             Ok {Id=id;Part=stock;Color=8;Position=Vec3.scale 0.5 (Vec3.add a b);Rotation=rotation}
 
-    let private pin id a b = pinAlong id zAxis a b
+    let internal pin id a b = pinAlong id zAxis a b
 
     let motorMountOptions (motor: WalkerPlacement) =
         if motor.Part<>"58121.dat" then invalidArg "motor" "Motor mounting motifs require the supported PF motor."
@@ -178,7 +179,7 @@ module WalkerPackaging =
                 && along>=low-8.0-1e-6 && along<=high+8.0+1e-6)) |> List.length
         max 0 (contacts+extraContacts-capacity)
 
-    let private twoBeamSupportRoutes orientation prefix (anchors: Vec3 list) (occupied: WalkerPlacement list) (socket: Vec3) (plane: float) =
+    let private twoBeamSupportRoutes takeCandidate acceptsPartial orientation prefix (anchors: Vec3 list) (occupied: WalkerPlacement list) (socket: Vec3) (plane: float) =
         let routesToPlane =
             anchors |> List.collect (fun a ->
                 [plane-20.0;plane+20.0;plane-40.0;plane+40.0] |> List.choose (fun firstPlane ->
@@ -188,38 +189,43 @@ module WalkerPackaging =
             |> List.sortBy (fun (a,firstPlane) ->
                 Vec3.distance {a with Z=0.0} {socket with Z=0.0},abs(a.Z-firstPlane),a.X,a.Y,a.Z,firstPlane)
             |> List.truncate maximumAnchorChoices
-        let routes = [
-            for anchor,firstPlane in routesToPlane do
-                let delta = Vec3.subtract {socket with Z=0.0} {anchor with Z=0.0}
-                let distance = Vec3.length delta
-                for partA,lengthA in stock do
-                    for partB,lengthB in stock do
-                        if distance<lengthA+lengthB-1e-6 && distance>abs(lengthA-lengthB)+1e-6 then
-                            let along = (lengthA*lengthA-lengthB*lengthB+distance*distance)/(2.0*distance)
-                            let height = sqrt(max 0.0 (lengthA*lengthA-along*along))
-                            let direction = Vec3.scale (1.0/distance) delta
-                            let perpendicular = Vec3.create -direction.Y direction.X 0
-                            let elbow = Vec3.add {anchor with Z=0.0}
-                                           (Vec3.add (Vec3.scale along direction) (Vec3.scale (float orientation*height) perpendicular))
-                            let a = beam (prefix+"-anchor-beam") partA lengthA anchor elbow firstPlane
-                            let b = beam (prefix+"-socket-beam") partB lengthB elbow socket plane
-                            let pins = [
-                                pin (prefix+"-anchor-pin") anchor {anchor with Z=firstPlane}
-                                pin (prefix+"-elbow-pin") {elbow with Z=firstPlane} {elbow with Z=plane}
-                            ]
-                            if pins |> List.forall Result.isOk then
-                                let pins = pins |> List.map (Result.defaultWith (fun _ -> invalidOp "Unreachable invalid support pin."))
-                                let free = pins |> List.forall (fun p ->
-                                    occupied |> List.forall (fun other ->
-                                        not(Catalog.shaftsOverlap p.Part p.Position p.Rotation other.Part other.Position other.Rotation)))
-                                if free then yield lengthA+lengthB,anchor,a,b,pins
-        ]
-        routes |> List.sortBy (fun (length,anchor,_,_,_) -> length,anchor.X,anchor.Y,anchor.Z)
-        |> List.map (fun (_,_,a,b,pins) -> [a;b],pins)
+        let anchors = routesToPlane |> List.groupBy fst |> List.sortBy (fun (anchor,_) -> anchor.X,anchor.Y,anchor.Z)
+        let lengths =
+            stock |> List.collect (fun a -> stock |> List.map (fun b -> a,b))
+                  |> List.groupBy (fun ((_,a),(_,b)) -> a+b) |> List.sortBy fst
+        seq {
+            for _,pairs in lengths do
+                for anchor,planes in anchors do
+                    let delta = Vec3.subtract {socket with Z=0.0} {anchor with Z=0.0}
+                    let distance = Vec3.length delta
+                    for _,firstPlane in planes do
+                        for (partA,lengthA),(partB,lengthB) in pairs do
+                            if distance<lengthA+lengthB-1e-6 && distance>abs(lengthA-lengthB)+1e-6 && takeCandidate () then
+                                let along = (lengthA*lengthA-lengthB*lengthB+distance*distance)/(2.0*distance)
+                                let height = sqrt(max 0.0 (lengthA*lengthA-along*along))
+                                let direction = Vec3.scale (1.0/distance) delta
+                                let perpendicular = Vec3.create -direction.Y direction.X 0
+                                let elbow = Vec3.add {anchor with Z=0.0}
+                                               (Vec3.add (Vec3.scale along direction) (Vec3.scale (float orientation*height) perpendicular))
+                                let a = beam (prefix+"-anchor-beam") partA lengthA anchor elbow firstPlane
+                                let b = beam (prefix+"-socket-beam") partB lengthB elbow socket plane
+                                let pins = [
+                                    pin (prefix+"-anchor-pin") anchor {anchor with Z=firstPlane}
+                                    pin (prefix+"-elbow-pin") {elbow with Z=firstPlane} {elbow with Z=plane}
+                                ]
+                                if pins |> List.forall Result.isOk then
+                                    let pins = pins |> List.map (Result.defaultWith (fun _ -> invalidOp "Unreachable invalid support pin."))
+                                    let free = pins |> List.forall (fun p ->
+                                        occupied |> List.forall (fun other ->
+                                            not(Catalog.shaftsOverlap p.Part p.Position p.Rotation other.Part other.Position other.Rotation)))
+                                    if free && acceptsPartial ([a;b],pins) then yield [a;b],pins
+        }
 
-    let private routesWithCount acceptsPartial orientation prefix anchors occupied count socket plane =
+    let private routesWithCount pruneBase takeCandidate acceptsPartial orientation prefix anchors occupied count socket plane =
         let rec routesWith count socket plane =
-            if count=2 then twoBeamSupportRoutes orientation prefix anchors occupied socket plane |> Seq.ofList
+            if count=2 then
+                let acceptsBase = if pruneBase then acceptsPartial else fun _ -> true
+                twoBeamSupportRoutes takeCandidate acceptsBase orientation prefix anchors occupied socket plane
             else
                 seq {
                     for offset in [Vec3.create 40 0 0;Vec3.create -40 0 0;Vec3.create 0 40 0;Vec3.create 0 -40 0] do
@@ -228,7 +234,7 @@ module WalkerPackaging =
                             let extension = beam (prefix + $"-bridge-beam-{count}") "32523.dat" 40.0 bridge socket plane
                             match pin (prefix + $"-bridge-pin-{count}") bridge {bridge with Z=plane} with
                             | Error _ -> ()
-                            | Ok connector when acceptsPartial ([extension],[connector]) ->
+                            | Ok connector when takeCandidate () && acceptsPartial ([extension],[connector]) ->
                                 for parts,pins in routesWith (count-1) bridge bridgePlane do
                                     if occupied @ pins |> List.forall (fun other ->
                                         not(Catalog.shaftsOverlap connector.Part connector.Position connector.Rotation
@@ -240,21 +246,50 @@ module WalkerPackaging =
 
     let supportRoutes orientation prefix anchors occupied socket plane =
         [2..5] |> List.tryPick (fun count ->
-            let routes = routesWithCount (fun _ -> true) orientation prefix anchors occupied count socket plane |> Seq.toList
+            let routes = routesWithCount false (fun () -> true) (fun _ -> true) orientation prefix anchors occupied count socket plane |> Seq.toList
             if routes.IsEmpty then None else Some routes) |> Option.defaultValue []
 
     let maximumMotionRoutesPerTopology = 512
-    let private boundedMotionRoutes acceptsPartial accepts orientation prefix anchors occupied socket plane =
+    let maximumPrunedRouteWorkPerTopology = 1024
+    let maximumLegacyRouteWorkPerTopology = 4096
+    let private boundedMotionRoutes pruneBase acceptsPartial accepts orientation prefix anchors occupied socket plane =
         seq {
             for count in 2..5 do
-                yield! routesWithCount acceptsPartial orientation prefix anchors occupied count socket plane
+                let mutable work = 0
+                let limit = if pruneBase then maximumPrunedRouteWorkPerTopology else maximumLegacyRouteWorkPerTopology
+                let takeCandidate () =
+                    if work>=limit then false
+                    else
+                        work<-work+1
+                        true
+                yield! routesWithCount pruneBase takeCandidate acceptsPartial orientation prefix anchors occupied count socket plane
                        |> Seq.truncate maximumMotionRoutesPerTopology |> Seq.filter accepts
-        } |> Seq.truncate 8 |> Seq.toList
+                if pruneBase && work>=limit then
+                    let mutable legacyWork = 0
+                    let takeLegacy () =
+                        if legacyWork>=maximumLegacyRouteWorkPerTopology then false
+                        else
+                            legacyWork<-legacyWork+1
+                            true
+                    yield! routesWithCount false takeLegacy acceptsPartial orientation prefix anchors occupied count socket plane
+                           |> Seq.truncate maximumMotionRoutesPerTopology |> Seq.filter accepts
+        } |> Seq.distinct |> Seq.truncate 8 |> Seq.toList
 
-    let motionSupportRoutes accepts = boundedMotionRoutes (fun _ -> true) accepts
+    let motionSupportRoutes accepts = boundedMotionRoutes false (fun _ -> true) accepts
 
     /// The predicate must reject each unsafe part independently, including incomplete routes.
-    let motionSupportRoutesWithPruning accepts = boundedMotionRoutes accepts accepts
+    let motionSupportRoutesWithPruning accepts = boundedMotionRoutes true accepts accepts
+
+    let supportDomainCompatible (prospective: WalkerPlacement list) knownRoutes (mounts: WalkerPlacement list) regenerate =
+        let free (pins: WalkerPlacement list) =
+            pins |> List.forall (fun pin ->
+                prospective |> List.forall (fun other ->
+                    not(Catalog.shaftsOverlap pin.Part pin.Position pin.Rotation
+                         other.Part other.Position other.Rotation)))
+        free (mounts |> List.filter (fun p -> (Catalog.get p.Part).Connector.IsSome))
+        && ((knownRoutes |> List.exists (snd >> free))
+            // A truncated cached pool cannot prove failure; regenerate with the full prospective occupancy.
+            || not(List.isEmpty (regenerate ())))
 
     let private support orientation prefix anchors occupied socket plane =
         match supportRoutes orientation prefix anchors occupied socket plane |> List.tryHead with
@@ -278,7 +313,12 @@ module WalkerPackaging =
             || model.Components |> List.exists (fun c -> isNull(box c))
             || (model.Components |> List.map _.Part |> Set.ofList)<>expected || model.Components.Length<>3
             || model.Components |> List.exists (fun c -> not(Double.IsFinite c.MassKg) || c.MassKg<=0.0 || not(Vec3.finite c.CenterLdu))
-            || (model.Components |> List.sumBy _.MassKg)>model.TotalMassKg+1e-9)
+            || model.ScaffoldComponents |> Option.exists (fun masses ->
+                isNull(box masses) || masses |> List.exists (fun c ->
+                    isNull(box c) || not(Double.IsFinite c.MassKg) || c.MassKg<=0.0 || not(Vec3.finite c.CenterLdu)
+                    || not(known.Contains c.Part) || expected.Contains c.Part)
+                || (masses |> List.map _.Part |> Set.ofList).Count<>masses.Length)
+            || ((model.Components @ Option.defaultValue [] model.ScaffoldComponents) |> List.sumBy _.MassKg)>model.TotalMassKg+1e-9)
         if invalidBalance then
             Error(error "invalid-balance-model" ["Balance estimates require positive mass, finite centers/support spans and exactly the three hardware component masses."])
         elif targets.Length<>3 || Set.ofList targets<>expected then
@@ -400,11 +440,16 @@ module WalkerPackaging =
                       (cachedMotion: (ScreenedMotion * ScreenedMotion * Result<MotionFrame list,string>) option)
                       (routeCache: Dictionary<string,(WalkerPlacement list * WalkerPlacement list) list> option)
                       (spaceCache: Dictionary<string,Result<WalkerMotionSpace.Space,GateDecision>> option)
+                      (fitCache: Dictionary<string * string * WalkerPlacement,bool> option)
                       (choose: (string -> string -> string list -> WalkerPlacement list list -> int option) option)
                       (inspect: ((unit -> WalkerConstructionInspection) -> unit) option) =
         let mutable pending = None
         let mutable activeGoal,activeRule = "hardware","reserve-gait-and-place-hardware"
         let mutable checkedParts,rejectedParts,cacheHits = 0,0,0
+        let fitCache = fitCache |> Option.defaultWith (fun () -> Dictionary<_,_>())
+        let mutable fitContext = Export.sha256 (Realization.json (request.Source,request.Targets,request.Drive,request.GroundClearance))
+        let baseFitContext = fitContext
+        let mutable bearingReservations: (string * WalkerMotionSpace.Space) list = []
         let select key rule bodies alternatives =
             match choose with
             | None -> Some 0
@@ -460,16 +505,28 @@ module WalkerPackaging =
                             match space with
                             | Ok space -> Some space
                             | Error gate -> failure<-Some gate;None
+                        let baseReservation = reservation
                         let hardware = request.Targets |> List.map _.Placement
                         let conflicts owner parts =
                             WalkerMotionSpace.fixedConflicts parts hardware
                             @ (reservation |> Option.map (fun space -> WalkerMotionSpace.conflicts space owner parts) |> Option.defaultValue [])
                         let fits owner parts =
-                            let accepted =
-                                WalkerMotionSpace.fitsFixed parts hardware
-                                && (reservation |> Option.exists (fun space -> WalkerMotionSpace.fits space owner parts))
-                            checkedParts <- checkedParts+1
-                            if not accepted then rejectedParts <- rejectedParts+1
+                            let cached context part check =
+                                let key = context,owner,part
+                                match fitCache.TryGetValue key with
+                                | true,accepted -> cacheHits<-cacheHits+1;accepted
+                                | _ ->
+                                    let accepted = check ()
+                                    fitCache.Add(key,accepted)
+                                    checkedParts<-checkedParts+1
+                                    if not accepted then rejectedParts<-rejectedParts+1
+                                    accepted
+                            let accepted = parts |> List.forall (fun part ->
+                                cached baseFitContext part (fun () ->
+                                    WalkerMotionSpace.fitsFixed [part] hardware
+                                    && (baseReservation |> Option.exists (fun space -> WalkerMotionSpace.fits space owner [part])))
+                                && (bearingReservations |> List.forall (fun (context,space) ->
+                                    cached context part (fun () -> WalkerMotionSpace.fits space owner [part]))))
                             inspect |> Option.iter (fun report -> report (fun () ->
                                 let hits =
                                     if accepted then []
@@ -548,27 +605,42 @@ module WalkerPackaging =
                         ]
                         let mutable shaftObstacles = request.Drive.Axles |> List.map (fun (body,part) ->
                             body,WalkerClearance.initialEnvelope {part with Part="3708.dat"})
+                        let mutable pendingSupports: (string * Vec3 * float * WalkerPlacement list * WalkerPlacement list * string list) list = []
+                        let mutable supportWitnesses: Map<string,(WalkerPlacement list * WalkerPlacement list) list> = Map.empty
                         let risk bodies parts =
                             let envelopes = obstacles @ (shaftObstacles |> List.choose (fun (body,envelope) ->
                                 if List.contains body bodies then None else Some envelope))
                             parts |> List.sumBy (fun part ->
                                 let envelope = WalkerClearance.initialEnvelope part
                                 envelopes |> List.sumBy (WalkerClearance.envelopeOverlapRisk envelope))
+                        let supportDomain prefix socket plane extras mounts bodies used =
+                            activeGoal<-prefix
+                            activeRule<-"forward-check-bounded-support-route-domain"
+                            let cacheKey = Realization.json (fitContext,prefix,anchors,used,extras,mounts,obstacles,shaftObstacles,bodies,socket,plane)
+                            let choices () =
+                                if not(fits ground (extras @ mounts)) then []
+                                else
+                                    [1;-1] |> List.collect (fun side ->
+                                        motionSupportRoutesWithPruning (fun (parts,pins) -> fits ground (parts @ pins))
+                                            side prefix anchors used socket plane)
+                                    |> List.sortBy (fun (parts,pins) ->
+                                        risk bodies (parts @ pins),parts |> List.sumBy (fun p -> (Catalog.get p.Part).Ports.Length))
+                                    |> List.truncate 8
+                            match routeCache with
+                            | None -> choices ()
+                            | Some cache ->
+                                match cache.TryGetValue cacheKey with
+                                | true,choices -> cacheHits<-cacheHits+1;choices
+                                | _ ->
+                                    let routes = choices ()
+                                    cache.Add(cacheKey,routes)
+                                    routes
                         let addSupport prefix socket plane extras mounts bodies =
                             if failure.IsNone && pending.IsNone then
                                 activeGoal <- prefix
                                 activeRule <- "stock-beam-route-outside-reserved-gait"
                                 let routeFailure () =
-                                    let first =
-                                        motionSupportRoutes (fun _ -> true) orientation prefix anchors
-                                            (occupied @ List.ofSeq addedPins) socket plane |> List.tryHead
-                                    let blocked =
-                                        first |> Option.map (fun (parts,pins) ->
-                                            conflicts ground (parts @ extras @ pins @ mounts)
-                                            |> List.truncate 4 |> List.map (fun c ->
-                                                $"{c.Part} / {c.Obstacle} at input {c.InputAngleRadians:G8} rad"))
-                                        |> Option.defaultValue []
-                                    error "no-motion-clear-support-route" (prefix::blocked)
+                                    error "bounded-support-domain-empty" [prefix]
                                 let routes =
                                     match choose with
                                     | None ->
@@ -577,26 +649,10 @@ module WalkerPackaging =
                                         |> List.tryHead |> Option.map (List.singleton >> Ok)
                                         |> Option.defaultWith (fun () -> Error(routeFailure ()))
                                     | Some _ ->
-                                        let used = occupied @ List.ofSeq addedPins
-                                        let cacheKey = Realization.json (prefix,anchors,used,obstacles,shaftObstacles,bodies,socket,plane,request.GroundClearance)
-                                        let choices () =
-                                            [1;-1] |> List.collect (fun side ->
-                                                motionSupportRoutesWithPruning (fun (parts,pins) -> fits ground (parts @ extras @ pins @ mounts))
-                                                    side prefix anchors used socket plane)
-                                            |> List.sortBy (fun (parts,pins) -> risk bodies (parts @ pins),parts |> List.sumBy (fun p ->
-                                                (Catalog.get p.Part).Ports.Length))
-                                            |> List.truncate 8
-                                        let choices =
-                                            match routeCache with
-                                            | None -> choices ()
-                                            | Some cache ->
-                                                match cache.TryGetValue cacheKey with
-                                                | true,choices -> cacheHits<-cacheHits+1;choices
-                                                | _ ->
-                                                    let routes = choices ()
-                                                    cache.Add(cacheKey,routes)
-                                                    routes
-                                        if choices.IsEmpty then Error(routeFailure ()) else Ok choices
+                                        let choices = supportDomain prefix socket plane extras mounts bodies (occupied @ List.ofSeq addedPins)
+                                        if choices.IsEmpty then
+                                            Error(error "bounded-support-domain-empty" (prefix::(addedPins |> Seq.map _.Id |> Seq.toList)))
+                                        else Ok choices
                                 match routes with
                                 | Error gate -> failure<-Some gate
                                 | Ok routes ->
@@ -619,6 +675,17 @@ module WalkerPackaging =
                                                             not(Catalog.shaftsOverlap pin.Part pin.Position pin.Rotation
                                                                  other.Part other.Position other.Rotation))))
                                             basic @ (longer |> List.distinct |> List.truncate 8)
+                                    let blocked = ResizeArray<string>()
+                                    let alternatives = alternatives |> List.filter (fun parts ->
+                                        let hits = [
+                                            for pin in parts |> List.filter (fun p -> (Catalog.get p.Part).Connector.IsSome) do
+                                                for other in addedPins do
+                                                    if Catalog.shaftsOverlap pin.Part pin.Position pin.Rotation
+                                                                             other.Part other.Position other.Rotation then
+                                                        yield other.Id
+                                        ]
+                                        blocked.AddRange hits
+                                        hits.IsEmpty)
                                     let structural = frameParts @ (request.Targets |> List.map _.Placement) @ List.ofSeq addedParts
                                     let alternatives =
                                         alternatives |> List.filter (fits ground) |> List.sortBy (fun parts ->
@@ -626,13 +693,25 @@ module WalkerPackaging =
                                             let pins = parts |> List.filter (fun p -> (Catalog.get p.Part).Connector.IsSome)
                                             pins |> List.sumBy (fun p -> contactCapacityDeficit p (structural @ beams) 0),
                                             risk bodies parts)
-                                    let rule = if (fst routes.Head).Length=2 then "two-beam-covered-pin-bracket" else "multi-beam-covered-pin-bracket"
-                                    match select prefix rule bodies alternatives with
-                                    | None -> ()
-                                    | Some index ->
-                                        let pins,parts = alternatives[index] |> List.partition (fun p -> (Catalog.get p.Part).Connector.IsSome)
-                                        addedParts.AddRange parts;addedPins.AddRange pins
-                                        derivation.Add $"Support({prefix}) -> {rule}"
+                                    let alternatives =
+                                        if choose.IsNone then alternatives
+                                        else
+                                            alternatives |> List.filter (fun parts ->
+                                                let prospective = List.ofSeq addedPins @ (parts |> List.filter (fun p -> (Catalog.get p.Part).Connector.IsSome))
+                                                pendingSupports |> List.forall (fun (next,socket,plane,extras,mounts,bodies) ->
+                                                    supportDomainCompatible prospective supportWitnesses[next] mounts
+                                                        (fun () -> supportDomain next socket plane extras mounts bodies (occupied @ prospective))))
+                                    if alternatives.IsEmpty then
+                                        failure<-Some(error "bounded-support-domain-empty"
+                                            (prefix::((Seq.append blocked (addedPins |> Seq.map _.Id)) |> Seq.distinct |> Seq.toList)))
+                                    else
+                                        let rule = if (fst routes.Head).Length=2 then "two-beam-covered-pin-bracket" else "multi-beam-covered-pin-bracket"
+                                        match select prefix rule bodies alternatives with
+                                        | None -> ()
+                                        | Some index ->
+                                            let pins,parts = alternatives[index] |> List.partition (fun p -> (Catalog.get p.Part).Connector.IsSome)
+                                            addedParts.AddRange parts;addedPins.AddRange pins
+                                            derivation.Add $"Support({prefix}) -> {rule}"
                         let gearMap = request.Drive.Gears |> List.groupBy fst |> List.map (fun (body,gears) -> body,gears |> List.map snd) |> Map.ofList
                         let axleMap = request.Drive.Axles |> Map.ofList
                         let driveBodies = request.Program.Motor.Body::(request.Program.Transmissions |> List.collect (fun t -> [t.Input;t.Output])) |> Set.ofList
@@ -719,19 +798,45 @@ module WalkerPackaging =
                                             bearingChoices.Add {Group=hinge.Id;Hinges=[hinge.Id];Placement=axle}
                         if pending.IsNone && failure.IsNone then
                             let axes = bearingSupports |> Seq.map (fun (_,_,_,body,axle) -> body,axle) |> Seq.distinct |> Seq.toList
+                            bearingReservations <-
+                                baseReservation |> Option.map (fun space ->
+                                    axes |> List.map (fun (body,axle) ->
+                                        Export.sha256 (Realization.json (baseFitContext,body,axle)),
+                                        WalkerMotionSpace.bearingAxisSpace space body axle))
+                                |> Option.defaultValue []
                             reservation <- reservation |> Option.map (fun space ->
                                 axes |> List.fold (fun current (body,axle) -> WalkerMotionSpace.addBearingAxis current body axle) space)
+                            fitContext <- Export.sha256 (Realization.json (fitContext,axes))
                             occupied <- (request.Source.Mounts |> List.filter (fun p -> not(remove.Contains p.Id)))
                                         @ (request.Source.Connections |> List.map _.Placement |> List.filter (fun p -> not(remove.Contains p.Id)))
                                         @ (axes |> List.map snd)
                                         @ (targetSockets |> List.collect (fun (_,_,_,_,pins) -> match pins with Ok pins -> pins | Error _ -> []))
                             shaftObstacles <- axes |> List.map (fun (body,axle) -> body,WalkerClearance.initialEnvelope axle)
-                            for prefix,socket,plane,extras,mounts in targetSockets do
-                                match mounts with
-                                | Error gate -> failure<-Some gate
-                                | Ok mounts -> addSupport prefix socket plane extras mounts [ground]
-                            for prefix,socket,plane,body,_ in bearingSupports do
-                                addSupport prefix socket plane [] [] [body;ground]
+                            let domains =
+                                (targetSockets |> List.choose (fun (prefix,socket,plane,extras,mounts) ->
+                                    match mounts with
+                                    | Error gate -> failure<-Some gate;None
+                                    | Ok mounts -> Some(prefix,socket,plane,extras,mounts,[ground])))
+                                @ (bearingSupports |> Seq.map (fun (prefix,socket,plane,body,_) ->
+                                    prefix,socket,plane,[],[],[body;ground]) |> Seq.toList)
+                            let ordered =
+                                if choose.IsNone then domains
+                                else
+                                    let ranked = ResizeArray<_>()
+                                    for index,((prefix,socket,plane,extras,mounts,bodies) as domain) in List.indexed domains do
+                                        if failure.IsNone then
+                                            let routes = supportDomain prefix socket plane extras mounts bodies occupied
+                                            if routes.IsEmpty then
+                                                failure<-Some(error "bounded-support-domain-empty" [prefix])
+                                            else
+                                                supportWitnesses <- supportWitnesses.Add(prefix,routes)
+                                                ranked.Add(routes.Length,index,domain)
+                                    ranked |> Seq.sortBy (fun (size,index,_) -> size,index)
+                                           |> Seq.map (fun (_,_,domain) -> domain) |> Seq.toList
+                            pendingSupports <- ordered
+                            for prefix,socket,plane,extras,mounts,bodies in ordered do
+                                pendingSupports <- pendingSupports.Tail
+                                addSupport prefix socket plane extras mounts bodies
                         match pending,failure with
                         | Some key,_ -> Error(error "construction-incomplete" [key])
                         | _,Some gate -> Error gate
@@ -774,13 +879,13 @@ module WalkerPackaging =
                                                    @ List.ofSeq derivation
                                         Clearance=clearance})
 
-    let internal replayObserved inspect request cachedMotion routeCache spaceCache choose =
-        build 1 request (Some cachedMotion) (Some routeCache) (Some spaceCache) (Some choose) inspect
+    let internal replayObserved inspect request cachedMotion routeCache spaceCache fitCache choose =
+        build 1 request (Some cachedMotion) (Some routeCache) (Some spaceCache) (Some fitCache) (Some choose) inspect
 
-    let internal replay request cachedMotion routeCache spaceCache choose =
-        replayObserved None request cachedMotion routeCache spaceCache choose
+    let internal replay request cachedMotion routeCache spaceCache fitCache choose =
+        replayObserved None request cachedMotion routeCache spaceCache fitCache choose
 
-    let private construct orientation request = build orientation request None None None None None
+    let private construct orientation request = build orientation request None None None None None None
 
     let realize request limit =
         if limit<1 || limit>maximumAttempts then invalidArg "limit" "Packaging realization permits one or two support orientations."

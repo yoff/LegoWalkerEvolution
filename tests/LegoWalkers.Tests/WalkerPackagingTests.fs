@@ -38,6 +38,22 @@ module WalkerPackagingTests =
          ObsoletePartIds=removed;GroundClearance=None;FootConstructionGates=[];Balance=None}
 
     [<Fact>]
+    let ``compatibility propagation regenerates blocked truncated pools but reuses surviving routes`` () =
+        let pin id x = {Id=id;Part="4459.dat";Color=8;Position=Vec3.create x 0 0
+                        Rotation={X=Vec3.create 0 0 1;Y=Vec3.create 1 0 0;Z=Vec3.create 0 1 0}}
+        let occupied,blocked,clear = pin "occupied" 0,pin "blocked" 0,pin "clear" 40
+        let mutable regenerations = 0
+        let regenerate routes () = regenerations<-regenerations+1;routes
+        Assert.True(WalkerPackaging.supportDomainCompatible [occupied] [[],[clear]] [] (regenerate []))
+        Assert.Equal(0,regenerations)
+        Assert.True(WalkerPackaging.supportDomainCompatible [occupied] [[],[blocked]] [] (regenerate [[],[clear]]))
+        Assert.Equal(1,regenerations)
+        Assert.False(WalkerPackaging.supportDomainCompatible [occupied] [[],[blocked]] [] (regenerate []))
+        Assert.Equal(2,regenerations)
+        Assert.False(WalkerPackaging.supportDomainCompatible [occupied] [[],[clear]] [blocked] (regenerate [[],[clear]]))
+        Assert.Equal(2,regenerations)
+
+    [<Fact>]
     let ``route inspection exposes constraint geometry while preserving bounded search`` () =
         let request = fixture ()
         let initial = WalkerConstructionTheory.start request "inspection-oracle" 16 16
@@ -266,6 +282,67 @@ module WalkerPackagingTests =
         {request with Source={request.Source with Bodies=bodies}}
 
     [<Fact>]
+    let ``scaffold alternatives move the backbone without moving walking joints and reconnect using covered pins`` () =
+        let program,source = Walker1Seeds.walker 2
+        let screened = Realization.screen program 72 |> Result.defaultWith (Realization.json >> failwith)
+        let request = WalkerPackaging.rebuildRequest screened source
+        let rail = request.Source.Bodies |> List.collect _.Parts |> List.find (fun part -> part.Id.StartsWith "rail-")
+        let bodies = request.Source.Bodies |> List.map (fun body ->
+            let parts = body.Parts |> List.map (fun part ->
+                if part.Id=rail.Id then {part with Id="scaffold-link-0-anchor-beam"} else part)
+            {body with Parts=parts})
+        let request = {request with Source={request.Source with Bodies=bodies}}
+        let source = request.Source
+        let alternatives = WalkerScaffold.options request screened |> Result.defaultWith (Realization.json >> failwith)
+        Assert.InRange(alternatives.Length,2,WalkerScaffold.maximumAlternatives)
+        Assert.Contains(source,alternatives)
+        for candidate in alternatives |> List.filter ((<>) source) do
+            let ids = (candidate.Bodies |> List.collect _.Parts) @ candidate.Mounts @ (candidate.Connections |> List.map _.Placement) |> List.map _.Id
+            Assert.Equal(ids.Length,(Set.ofList ids).Count)
+            Assert.Equal<WalkerPivotChoice list>(source.Connections,candidate.Connections)
+            Assert.Equal<WalkerFootChoice list>(source.Feet,candidate.Feet)
+            let ground = program.Bodies |> List.find _.Grounded |> _.Id
+            Assert.Equal<WalkerBodyChoice list>(source.Bodies |> List.filter (fun b -> b.Body<>ground),
+                         candidate.Bodies |> List.filter (fun b -> b.Body<>ground))
+            let parts = candidate.Bodies |> List.find (fun b -> b.Body=ground) |> _.Parts
+            Assert.NotEqual<WalkerPlacement list>((source.Bodies |> List.find (fun b -> b.Body=ground)).Parts,parts)
+            let generated = candidate.Mounts |> List.filter (fun p -> p.Id.StartsWith "scaffold-")
+            Assert.NotEmpty generated
+            let frame = parts |> List.filter (fun p ->
+                p.Id.StartsWith "rail-" || p.Id.StartsWith "bridge-"
+                || p.Id.Contains "frame-upright-" || p.Id.StartsWith "scaffold-")
+            for pin in generated do
+                let contacts = frame |> List.collect (fun part ->
+                    (Catalog.get part.Part).Ports |> List.choose (fun port ->
+                        let point = Vec3.add part.Position (Rotation.apply part.Rotation port.Position)
+                        let axis = Rotation.apply part.Rotation port.Axis
+                        let along = Vec3.dot (Vec3.subtract point pin.Position) pin.Rotation.X
+                        let low,high = Catalog.shaftRange pin.Part
+                        if abs(Vec3.dot axis pin.Rotation.X)>0.999
+                           && Vec3.length(Vec3.cross (Vec3.subtract point pin.Position) pin.Rotation.X)<1e-6
+                           && along>=low && along<=high then Some along else None))
+                Assert.Equal(2,contacts.Length)
+                for along in contacts do
+                    let low,high = Catalog.shaftRange pin.Part
+                    Assert.True(along-10.0>=low-1e-6 && along+10.0<=high+1e-6)
+
+    [<Fact>]
+    let ``scaffold displacement adjusts measured mass before hardware balancing`` () =
+        let request = fixture ()
+        let ground = request.Program.Bodies |> List.find _.Grounded |> _.Id
+        let rail = request.Source.Bodies |> List.find (fun b -> b.Body=ground) |> _.Parts |> List.find (fun p -> p.Id.StartsWith "rail-")
+        let masses = request.Targets |> List.map (fun t ->
+            {Part=t.Placement.Id;MassKg=0.05;CenterLdu=t.Placement.Position})
+        let model = {TotalMassKg=0.5;CenterOfMassLdu=Vec3.create 100 -50 60
+                     SupportCenterLdu=Vec3.create 100 -50 60;SupportHalfSpanLdu=Vec3.create 100 0 60
+                     Components=masses;ScaffoldComponents=Some [{Part=rail.Id;MassKg=0.1;CenterLdu=rail.Position}]}
+        let bodies = request.Source.Bodies |> List.map (fun b ->
+            {b with Parts=b.Parts |> List.map (fun p -> if p.Id=rail.Id then {p with Position=Vec3.add p.Position (Vec3.create 40 -24 20)} else p)})
+        let source = {request.Source with Bodies=bodies}
+        let corrected = WalkerScaffold.balanceForSource {request with Balance=Some model} source |> Option.get
+        Assert.Equal(Vec3.create 108 -54.8 64,corrected.CenterOfMassLdu)
+
+    [<Fact>]
     let ``bounded target assignments retain centered and nominal motor branches despite payload combinations`` () =
         let request = fixture () |> forwardFrame
         let targets = request.Targets |> List.map (fun t ->
@@ -337,6 +414,7 @@ module WalkerPackagingTests =
         let model =
             {TotalMassKg=0.5;CenterOfMassLdu=Vec3.create 80 -50 100
              SupportCenterLdu=Vec3.create 180 -50 60;SupportHalfSpanLdu=Vec3.create 150 0 100
+             ScaffoldComponents=None
              Components=request.Targets |> List.map (fun t ->
                 let mass = if t.Placement.Id="payload-battery" then 0.2 elif t.Placement.Id=request.Source.MotorPart then 0.06 else 0.025
                 let original = request.Source.Bodies |> List.collect _.Parts |> List.find (fun p -> p.Id=t.Placement.Id)
@@ -495,6 +573,14 @@ module WalkerPackagingTests =
         Assert.Equal(2,motorBonds.Length)
         Assert.True(motorBonds |> List.forall (fun b ->
             b.PartA.EndsWith("-corner") && abs b.AxisB.X>0.999 && b.Connector.EndsWith("-side-pin")))
+        let proof = state.Pending.Value
+        let kinds = proof.Goals |> List.map (fun goal -> goal.Id,goal.Kind) |> Map.ofList
+        let axles = proof.Steps |> List.filter (fun step -> kinds[step.Goal]="axle-stock") |> List.map _.Goal
+        let mutable prior = []
+        for step in proof.Steps do
+            if kinds[step.Goal]="mount-and-bearing" then
+                Assert.True(axles @ prior |> List.forall (fun id -> List.contains id step.Dependencies))
+                prior <- prior @ [step.Goal]
 
     [<Fact>]
     let ``nine L stock covers the loaded output walls without crossing the neighboring link planes`` () =

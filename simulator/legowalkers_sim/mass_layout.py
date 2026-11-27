@@ -9,7 +9,7 @@ from .bridge import AdapterError, LDU_TO_METERS
 from .collision import prepare_parts, to_mujoco
 from .payload import apply_payloads, load_profile, part_mass_center
 
-VERSION = "mass-layout-v2"
+VERSION = "mass-layout-v3"
 
 
 def _hull(points):
@@ -97,7 +97,7 @@ def analyze_layout(checked, scene, parts, profile, *, inertia_tensors=None):
     bounds = []
     payloads = {item["partInstance"]: profile["components"][item["product"]]
                 for item in checked.manifest.get("payloads", [])}
-    components = []
+    components, part_masses = [], []
     for part in parts:
         vertices = np.array([v for triangle in part.geometry.triangles
                              for v in (triangle.v0, triangle.v1, triangle.v2)])*LDU_TO_METERS
@@ -105,13 +105,16 @@ def analyze_layout(checked, scene, parts, profile, *, inertia_tensors=None):
             raise AdapterError(f"Invalid mass-layout geometry: {part.instance}")
         lower, upper = vertices.min(axis=0), vertices.max(axis=0)
         bounds.append((lower, upper))
+        mass, component_center = part_mass_center(part, payloads.get(part.instance))
+        if (not np.isfinite(mass) or mass <= 0 or not np.isfinite(component_center).all()
+                or np.any(component_center < lower-1e-6) or np.any(component_center > upper+1e-6)):
+            raise AdapterError(f"Mass-layout component mass/center is invalid for its physical geometry: {part.instance}")
+        measured = {"partInstance": part.instance, "massKg": mass,
+                    "centerLdu": (component_center/LDU_TO_METERS).tolist(),
+                    "source": "payload-profile-estimate" if part.instance in payloads else "ABS-mesh-estimate"}
+        part_masses.append(measured)
         if part.instance in payloads or part.geometry.part_id == "58121.dat":
-            mass, component_center = part_mass_center(part, payloads.get(part.instance))
-            if np.any(component_center < lower-1e-6) or np.any(component_center > upper+1e-6):
-                raise AdapterError(f"Mass-layout component center lies outside its physical geometry: {part.instance}")
-            components.append({"partInstance": part.instance, "massKg": mass,
-                               "centerLdu": (component_center/LDU_TO_METERS).tolist(),
-                               "source": "payload-profile-estimate" if part.instance in payloads else "ABS-mesh-estimate"})
+            components.append(measured)
     if not bounds:
         raise AdapterError("Mass-layout gate requires actual part geometry.")
     lower = np.min([lo for lo, _ in bounds], axis=0)
@@ -158,7 +161,7 @@ def analyze_layout(checked, scene, parts, profile, *, inertia_tensors=None):
         "centerOfMassLdu": (center/LDU_TO_METERS).tolist(),
         "heightAboveLowestFootMeters": height, "sweptFootHullXZLdu": hull,
         "supportEnvelopeSource": reach_source, "supportHalfPlaneMarginMeters": margin,
-        "components": components, "warnings": warnings, "dynamicQualification": False,
+        "components": components, "partMasses": part_masses, "warnings": warnings, "dynamicQualification": False,
         "inertia": _inertia_layout(scene, center, list(feet.values()), inertia_tensors or {}),
         "gate": {"gate": "mass-layout", "outcome": "warning" if warnings else "pass",
                  "code": "estimated-mass-and-support-envelope",

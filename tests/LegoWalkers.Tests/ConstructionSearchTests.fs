@@ -101,6 +101,61 @@ module ConstructionSearchTests =
         Assert.True(other.IsSome)
 
     [<Fact>]
+    let ``finite conflict reduction checks jointly freed choices and respects its budget`` () =
+        let bindings = ["layout","blocked";"a","0";"b","0"]
+        let domains = ["a",["0";"1"];"b",["0";"1"]]
+        let mutable checkedAssignments = []
+        let rejects assignment =
+            checkedAssignments <- assignment::checkedAssignments
+            let values = Map.ofList assignment
+            Some(not(values["a"]="1" && values["b"]="1"))
+        let reduced,checks = ConstructionSearch.minimizeFiniteConflict 8 bindings domains rejects
+        Assert.Equal<(string * string) list>(["layout","blocked";"b","0"],reduced)
+        Assert.Equal(6,checks)
+        Assert.Contains(checkedAssignments,fun values -> Map.ofList values |> fun map -> map["a"]="1" && map["b"]="1")
+        let bounded,count = ConstructionSearch.minimizeFiniteConflict 1 bindings domains (fun _ -> failwith "Budget exceeded")
+        Assert.Equal<(string * string) list>(bindings,bounded)
+        Assert.Equal(0,count)
+        let mutable calls = 0
+        let incomplete,_ = ConstructionSearch.minimizeFiniteConflict 8 bindings domains (fun _ ->
+            calls<-calls+1
+            if calls=1 then Some true else None)
+        Assert.Equal<(string * string) list>(bindings,incomplete)
+        Assert.Equal(2,calls)
+
+    [<Fact>]
+    let ``local causal conflict skips unrelated siblings and survives checkpoint continuation`` () =
+        let initial = seed [goal "layout" [] false;goal "easy" ["layout"] false
+                            goal "socket" ["layout"] false;goal "oracle" [] true]
+        let mutable conflicts = 0
+        let expand (proof: ConstructionProof) _ =
+            let values = proof.Steps |> List.map (fun s -> s.Goal,s.Choice) |> Map.ofList
+            if not(values.ContainsKey "layout") then
+                Branch("layout",["blocked";"clear"] |> List.map (fun v -> choice "layout" v [] [] [] []))
+            elif not(values.ContainsKey "easy") then
+                Branch("easy",["a";"b";"c";"d"] |> List.map (fun v -> choice "easy" v ["layout"] [] [] []))
+            elif values["layout"]="blocked" then
+                conflicts<-conflicts+1
+                BlockedBy({Gate="support";Outcome="reject";Code="bounded-domain-empty";Diagnostics=["socket"]},
+                          ["layout","blocked"])
+            elif not(values.ContainsKey "socket") then
+                Branch("socket",[choice "socket" "route" ["layout"] [] [] []])
+            else Built("witness",proof)
+        let state,witness = ConstructionSearch.next expand initial
+        Assert.True(witness.IsSome)
+        Assert.Equal(1,conflicts)
+        Assert.Equal("clear",witness.Value.Steps.Head.Choice)
+        Assert.Equal(3,state.Pruned)
+        Assert.Equal<(string * string) list>(["layout","blocked"],state.Nogoods.Head.Bindings)
+        let options = JsonSerializerOptions(PropertyNamingPolicy=JsonNamingPolicy.CamelCase)
+        let checkpoint = JsonSerializer.Deserialize<ConstructionSearchState>(Realization.json state,options)
+        Assert.Equal<ConstructionNogood list>(state.Nogoods,checkpoint.Nogoods)
+        Assert.Throws<ArgumentException>(fun () ->
+            ConstructionSearch.next (fun _ _ ->
+                BlockedBy({Gate="support";Outcome="reject";Code="bad";Diagnostics=[]},["layout","unknown"])) initial
+            |> ignore) |> ignore
+
+    [<Fact>]
     let ``checkpoint roundtrip reproduces continuation and bound accounting`` () =
         let pending,_ = ConstructionSearch.next expansion (fixture ())
         let state = ConstructionSearch.reject (verdict true) pending

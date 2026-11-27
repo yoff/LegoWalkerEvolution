@@ -225,16 +225,19 @@ module WalkerMotionSpace =
         reserve s g |> Result.map (fun space ->
             {space with GroundPlan=requirements |> Option.map (fun requirements -> groundPlan requirements s g)})
 
-    let private violatesGround (plan: WalkerGroundPlan) (phase: MotionGroundPhase) parts =
-        seq {
-            let r,p = plan.Requirements.MaximumRollRadians,plan.Requirements.MaximumPitchRadians
-            for part in parts do
-                let low = stockBoxes part |> List.collect corners |> List.map (fun point ->
-                    let delta = Vec3.subtract point phase.SupportCenter
-                    -delta.Y*cos r*cos p-abs delta.X*sin p-abs delta.Z*sin r) |> List.min
-                if low<plan.Requirements.MinimumNonFootClearanceLdu-1e-6 then
-                    yield {Part=part.Id;Obstacle="planned-ground-clearance";Body="ground";InputAngleRadians=phase.InputAngleRadians}
-        }
+    let private groundViolations (plan: WalkerGroundPlan) =
+        let r,p = plan.Requirements.MaximumRollRadians,plan.Requirements.MaximumPitchRadians
+        let cr,cp,sr,sp = cos r,cos p,sin r,sin p
+        fun (phase: MotionGroundPhase) (placedCorners: (string * Vec3 list) list) ->
+            seq {
+                for part,points in placedCorners do
+                    let height point =
+                        let delta = Vec3.subtract point phase.SupportCenter
+                        -delta.Y*cr*cp-abs delta.X*sp-abs delta.Z*sr
+                    let low = points.Tail |> List.fold (fun low point -> min low (height point)) (height points.Head)
+                    if low<plan.Requirements.MinimumNonFootClearanceLdu-1e-6 then
+                        yield {Part=part;Obstacle="planned-ground-clearance";Body="ground";InputAngleRadians=phase.InputAngleRadians}
+            }
 
     let auditGround (plan: WalkerGroundPlan) (s: ScreenedMotion) (g: WalkerGenome) =
         if plan.MechanismId<>s.MechanismId then invalidArg "ground-plan" "The ground plan belongs to a different mechanism."
@@ -246,6 +249,7 @@ module WalkerMotionSpace =
         if plan<>groundPlan plan.Requirements s g then
             invalidArg "ground-plan" "The ground plan must match the current physical soles and finite nominal stance geometry."
         let permitted = g.Feet |> List.collect WalkerFootChoice.contacts |> List.map _.Part |> Set.ofList
+        let checkGround = groundViolations plan
         List.zip frames plan.Phases |> List.collect (fun (frame,phase) ->
             let physical =
                 (g.Bodies |> List.collect (fun body ->
@@ -256,7 +260,8 @@ module WalkerMotionSpace =
                     let hinge = s.Program.Hinges |> List.find (fun h -> List.contains h.Id pivot.Hinges)
                     let owner = if (Catalog.get pivot.Placement.Part).Connector=Some Axle then hinge.B.Body else hinge.A.Body
                     placed s frame owner pivot.Placement))
-            violatesGround plan phase physical |> Seq.toList)
+            let vertices = physical |> List.map (fun part -> part.Id,stockBoxes part |> List.collect corners)
+            checkGround phase vertices |> Seq.toList)
 
     let private intendedJoint (space: Space) owner (part: WalkerPlacement) (obstacle: Obstacle) =
         let declared (connector: WalkerPlacement) (memberPart: WalkerPlacement) body =
@@ -267,13 +272,15 @@ module WalkerMotionSpace =
 
     let private intersections space owner parts =
         seq {
+            let boxed = parts |> List.map (fun part -> part,stockBoxes part)
             if space.Grounded.Contains owner then
                 match space.GroundPlan with
                 | Some plan ->
-                    for phase in plan.Phases do yield! violatesGround plan phase parts
+                    let vertices = boxed |> List.map (fun (part,boxes) -> part.Id,boxes |> List.collect corners)
+                    let checkGround = groundViolations plan
+                    for phase in plan.Phases do yield! checkGround phase vertices
                 | None -> ()
-            for part in parts do
-                let boxes = stockBoxes part
+            for part,boxes in boxed do
                 for obstacle in space.Obstacles do
                     if part.Id<>obstacle.Part.Id && owner<>obstacle.Body
                        && (boxes |> List.exists (fun b -> boundsOverlap b.Low b.High obstacle.Low obstacle.High))
@@ -306,6 +313,9 @@ module WalkerMotionSpace =
 
     let addBearingAxis space body part =
         {space with Obstacles=space.Obstacles @ [obstacle body part [0.0,stockBoxes part]]}
+
+    let bearingAxisSpace space body part =
+        addBearingAxis {space with Obstacles=[];GroundPlan=None} body part
 
     let describe space = {|
         version=version;sampledPoses=space.Samples;motorTurnsCovered=space.Turns

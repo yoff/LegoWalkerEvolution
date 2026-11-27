@@ -49,6 +49,7 @@ def test_balance_estimate_is_passed_into_each_constructor_alternative(tmp_path, 
               "sweptFootHullXZLdu": [[0, -100], [400, 200]],
               "components": [{"partInstance": p, "massKg": m, "centerLdu": [0, 0, 0]}
                              for p, m in [("motor", .06), ("payload-battery", .2), ("payload-receiver", .025)]]}
+    layout["partMasses"] = [{"partInstance": "beam-a", "massKg": .01, "centerLdu": [0, 0, 0]}]
     monkeypatch.setattr(motion_carry, "_centering", lambda *args: (
         {"payload-battery": {"x": 200, "y": -120, "z": 40}}, layout))
     models = []
@@ -62,7 +63,7 @@ def test_balance_estimate_is_passed_into_each_constructor_alternative(tmp_path, 
         native_episode.stage_native(archive, source)
         motion_carry.ensure_pending(archive, pending(archive), Proposals(), tmp_path)
         assert len(models) == 4
-        assert all(model == motion_carry._balance_model(layout) for model in models)
+        assert all(model == motion_carry._balance_model(layout, scaffold_parts=["beam-a"]) for model in models)
         assert archive.counts() == {}
     finally:
         archive.db.close()

@@ -12,10 +12,12 @@ from .mass_layout import mass_layout_gate
 from .payload import load_profile
 
 POLICY = {
-    "version": "motion-first-carry-forward-v4",
+    "version": "motion-first-carry-forward-v5",
     "samples": 96, "groundClearanceLdu": 8,
-    "packagingVersion": "packaging-realization-v21",
-    "theoryVersion": "walker-construction-theory-v24",
+    "packagingVersion": "packaging-realization-v27",
+    "theoryVersion": "walker-construction-theory-v30",
+    "scaffold": "Bounded backbone relocations with stock routes to retained walking interfaces; original frame remains an alternative. Exact whole-chassis connectivity remains mandatory.",
+    "search": "Choose smallest support domains first and propagate connector compatibility; factor gait/bearing caches and minimize local conflicts with bounded joint axle counterfactuals. Truncated route domains do not prove physical impossibility.",
     "maximumBuildAttempts": 4, "plateLayers": [1, 2],
     "preserves": "Reference walking motion and electrical control; old physical stock is realization advice.",
     "placement": "Try estimated CoM centering at fixed leg mounts, then inherited placement preferences; all new routes remain mandatory.",
@@ -74,7 +76,7 @@ def _centering(parent, library, profile):
     return {"payload-battery": position}, layout
 
 
-def _balance_model(layout, motor_part="motor"):
+def _balance_model(layout, motor_part="motor", scaffold_parts=()):
     try:
         total = layout["totalMassKg"]
         center = np.asarray(layout["centerOfMassLdu"], dtype=float)
@@ -99,13 +101,22 @@ def _balance_model(layout, motor_part="motor"):
                 raise ValueError("invalid component mass or center")
         if sum(c["massKg"] for c in selected) > total + 1e-9:
             raise ValueError("hardware masses exceed total mass")
+        scaffold = [c for c in layout.get("partMasses", []) if c["partInstance"] in scaffold_parts]
+        if (len(scaffold) != len(set(scaffold_parts)) or len({c["partInstance"] for c in scaffold}) != len(scaffold)
+                or any(not np.isfinite(c["massKg"]) or c["massKg"] <= 0
+                       or np.asarray(c["centerLdu"]).shape != (3,) or not np.isfinite(c["centerLdu"]).all()
+                       for c in scaffold)
+                or sum(c["massKg"] for c in selected+scaffold) > total+1e-9):
+            raise ValueError("missing, duplicate or invalid scaffold masses")
         point = lambda values: dict(zip(("x", "y", "z"), map(float, values)))
         support = (lower+upper)/2
         return {"totalMassKg": float(total), "centerOfMassLdu": point(center),
                 "supportCenterLdu": point([support[0], center[1], support[1]]),
                 "supportHalfSpanLdu": point([span[0], 0, span[1]]),
                 "components": [{"part": c["partInstance"], "massKg": c["massKg"],
-                                "centerLdu": point(c["centerLdu"])} for c in selected]}
+                                "centerLdu": point(c["centerLdu"])} for c in selected],
+                "scaffoldComponents": [{"part": c["partInstance"], "massKg": c["massKg"],
+                                        "centerLdu": point(c["centerLdu"])} for c in scaffold] if scaffold_parts else None}
     except (KeyError, TypeError, ValueError) as error:
         raise AdapterError(f"Invalid source balance estimate: {error}") from error
 
@@ -144,8 +155,14 @@ def rebuild(parent, output, generator, library, payload_profile=None, *, preserv
     balance_file = None
     if layout is not None:
         balance_file = output / "balance-model.json"
-        motor_part = json.loads((parent / "realization.json").read_text())["motorPart"]
-        write_json(balance_file, _balance_model(layout, motor_part))
+        genome = json.loads((parent / "realization.json").read_text())
+        manifest = load_manifest(parent / "manifest.json")
+        ground = manifest["chassis"]
+        hardware = {genome["motorPart"], "payload-battery", "payload-receiver"}
+        scaffold_parts = [p["id"] for b in genome["bodies"] if b["body"] == ground
+                          for p in b["parts"] if p["id"] not in hardware]
+        scaffold_parts += [p["id"] for p in genome["mounts"]]
+        write_json(balance_file, _balance_model(layout, genome["motorPart"], scaffold_parts))
     hint_file = output / "target-placements.json"
     if hints is not None:
         write_json(hint_file, hints)

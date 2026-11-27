@@ -178,6 +178,8 @@ let buildWalker options =
     let mutable observedProof = initial.Frontier.Head
     let mutable inspection: WalkerConstructionInspection option = None
     let mutable detail = "Opening the construction proof."
+    let appendEvent (text: string) =
+        File.AppendAllText(Path.Combine(directory,"construction-events.jsonl"),text.Replace("\n","").Replace("\r","")+"\n")
     let writeSnapshot force =
         if force || timer.Elapsed.TotalSeconds-lastSnapshot>=0.5 then
             let stamp = DateTimeOffset.UtcNow.ToString("O")
@@ -186,7 +188,8 @@ let buildWalker options =
                 status=observedState.Status;detail=detail;proof=observedProof
                 openGoals=ConstructionSearch.openGoals observedProof;inspection=inspection
                 search={|visited=observedState.Visited;maximumStates=observedState.MaximumStates
-                         frontier=observedState.Frontier.Length;pruned=observedState.Pruned;discarded=observedState.Discarded|}
+                         frontier=observedState.Frontier.Length;pruned=observedState.Pruned;discarded=observedState.Discarded
+                         learnedConflicts=observedState.Nogoods.Length|}
                 authority="Live partial construction and sampled stock envelopes; not a qualified assembly or physics."
                 dynamicTrials=0
             |}
@@ -198,8 +201,9 @@ let buildWalker options =
                 node=ConstructionSearch.nodeId observedProof;visited=observedState.Visited
                 goal=inspection |> Option.map _.Goal
                 ``checked``=inspection |> Option.map _.Checked;rejected=inspection |> Option.map _.Rejected
+                cacheHits=inspection |> Option.map _.CacheHits
             |}
-            File.AppendAllText(Path.Combine(directory,"construction-events.jsonl"),Realization.json event |> fun text -> text.Replace("\n","").Replace("\r","")+"\n")
+            appendEvent (Realization.json event)
             lastSnapshot <- timer.Elapsed.TotalSeconds
     let observe state proof outcome =
         if ConstructionSearch.nodeId proof<>ConstructionSearch.nodeId observedProof then inspection<-None
@@ -213,7 +217,18 @@ let buildWalker options =
                 |> Option.defaultValue "Verifying the locally constructed witness."
             | Some(Branch(goal,choices)) -> $"{goal}: {choices.Length} applicable productions."
             | Some(Blocked gate) -> gate.Code+": "+String.concat "; " gate.Diagnostics
+            | Some(BlockedBy(gate,_)) -> gate.Code+": "+String.concat "; " gate.Diagnostics
             | Some(Built _) -> "Local construction witness found; external admission is still required."
+        match outcome with
+        | Some(Blocked gate) | Some(BlockedBy(gate,_)) ->
+            let bindings = match outcome with Some(BlockedBy(_,bindings)) -> bindings | _ -> []
+            let event = {|
+                eventType="rejection";updated=DateTimeOffset.UtcNow.ToString("O")
+                elapsedSeconds=timer.Elapsed.TotalSeconds;status=state.Status;detail=detail
+                node=ConstructionSearch.nodeId proof;visited=state.Visited;gate=gate;bindings=bindings
+            |}
+            appendEvent (Realization.json event)
+        | _ -> ()
         writeSnapshot false
     let inspect produce =
         if timer.Elapsed.TotalSeconds-lastSnapshot>=0.5 then

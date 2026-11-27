@@ -41,6 +41,50 @@ let ``new bearing axes remain obstacles outside the original swept bounds`` () =
     Assert.Equal(axis.Id,conflict.Obstacle)
 
 [<Fact>]
+let ``blocked base beams cannot expand unbounded partial route work`` () =
+    let anchors = [for index in 0..15 do
+                       let angle = float index*Math.PI/8.0
+                       yield Vec3.create (180.0*cos angle) (180.0*sin angle) 100]
+    let socket = Vec3.create 0 0 100
+    let mutable checks = 0
+    let accepts (parts: WalkerPlacement list,_) =
+        checks<-checks+1
+        parts |> List.forall (fun p -> not(p.Id.EndsWith "-anchor-beam"))
+    Assert.Empty(WalkerPackaging.motionSupportRoutesWithPruning accepts 1 "blocked-work" anchors [] socket socket.Z)
+    let work = WalkerPackaging.maximumPrunedRouteWorkPerTopology+WalkerPackaging.maximumLegacyRouteWorkPerTopology
+    let bound = 4*(work+2*WalkerPackaging.maximumMotionRoutesPerTopology)
+    Assert.InRange(checks,1,bound)
+
+[<Fact>]
+let ``base route pruning prevents rejected short beams from exhausting the topology bound`` () =
+    let anchors = [for index in 0..15 do
+                       let angle = float index*Math.PI/8.0
+                       yield Vec3.create (180.0*cos angle) (180.0*sin angle) 100]
+    let socket = Vec3.create 0 0 100
+    let accepts (parts: WalkerPlacement list,_) = parts |> List.forall (fun p -> p.Part="32525.dat")
+    let all = WalkerPackaging.supportRoutes 1 "base-cutoff" anchors [] socket socket.Z
+    Assert.True(all.Length>WalkerPackaging.maximumMotionRoutesPerTopology)
+    Assert.Empty(WalkerPackaging.motionSupportRoutes accepts 1 "base-cutoff" anchors [] socket socket.Z)
+    let routes = WalkerPackaging.motionSupportRoutesWithPruning accepts 1 "base-cutoff" anchors [] socket socket.Z
+    Assert.NotEmpty routes
+    Assert.All(routes,fun (parts,pins) ->
+        Assert.Equal(2,parts.Length)
+        Assert.True(accepts(parts,pins)))
+
+[<Fact>]
+let ``factored bearing checks preserve complete reservation decisions`` () =
+    let s,g,target = fixture ()
+    let space = WalkerMotionSpace.reserve s g |> unwrap
+    let moved = {target with Position=Vec3.add target.Position (Vec3.create 300 0 0)}
+    let axis = {moved with Id="new-bearing-axis";Part="3705.dat"}
+    let extended = WalkerMotionSpace.addBearingAxis space s.Program.Motor.Body axis
+    let isolated = WalkerMotionSpace.bearingAxisSpace space s.Program.Motor.Body axis
+    for owner in ["chassis";s.Program.Motor.Body] do
+        for part in [target;moved;{moved with Position=Vec3.add moved.Position (Vec3.create 100 0 0)}] do
+            Assert.Equal(WalkerMotionSpace.fits extended owner [part],
+                         WalkerMotionSpace.fits space owner [part] && WalkerMotionSpace.fits isolated owner [part])
+
+[<Fact>]
 let ``reservation covers five motor turns of a reduced walking gait`` () =
     let s,g,_ = fixture ()
     let edge = s.Program.Transmissions |> List.find (fun t -> t.Input=s.Program.Motor.Body)

@@ -24,7 +24,7 @@ POLICY = {
     "polarityFeedback": {"version": "safe-backward-gait-repair-v1", "maximumAttemptsPerBirth": 1,
                          "qualification": "Fresh trial required; never inherit fitness.",
                          "mutation": "Control-only motor-direction, after consistent negative complete cycles and all other gates pass."},
-    "massLayoutGate": {"version": "mass-layout-v2", "mass": "derived-from-parts-and-payload-profile",
+    "massLayoutGate": {"version": "mass-layout-v3", "mass": "derived-from-parts-and-payload-profile",
                        "supportEnvelope": "diagnostic-only-no-static-balance-rejection"},
     "stanceSupportFeedback": {
         "version": "measured-stance-support-v1", "authority": "advisory-only-not-a-qualification-gate",
@@ -78,8 +78,9 @@ POLICY = {
     "construction": {"version": "technic-construction-v11",
                      "motionFirstBuilder": {
                          "version": "sampled-motion-ground-reservation-v2",
-                         "theoryVersion": "walker-construction-theory-v24",
-                         "packagingVersion": "packaging-realization-v21",
+                         "theoryVersion": "walker-construction-theory-v30",
+                         "packagingVersion": "packaging-realization-v27",
+                         "scaffold": "Search backbone relocations and stock reconnections to retained walking sockets; original chassis remains an alternative.",
                          "balance": "Prefer joint motor/battery/receiver layouts with smaller normalized source-mass COM offsets from swept-foot bounds before support routing; not dynamic qualification.",
                          "motorPlacement": "Coupled housing-centered/inward/outward axial placement and input-mesh plane routing; up to nine motor placements with one target assignment reserved per feasible placement.",
                          "motorMountMotifs": ["front-forward", "front-rearward", "rear-saddle"],

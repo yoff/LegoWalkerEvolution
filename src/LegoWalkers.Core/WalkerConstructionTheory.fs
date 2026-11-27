@@ -4,7 +4,7 @@ open System
 open System.Collections.Generic
 
 module WalkerConstructionTheory =
-    let version = "walker-construction-theory-v24"
+    let version = "walker-construction-theory-v30"
 
     type private Alternative<'a> = {
         Key: string
@@ -25,12 +25,14 @@ module WalkerConstructionTheory =
         if String.IsNullOrWhiteSpace oracleScope then invalidArg "oracleScope" "A frozen external oracle scope is required."
         identity (version,ConstructionSearch.version,WalkerPackaging.version,request,oracleScope)
 
-    let private resolve (proof: ConstructionProof) (goal: ConstructionGoal) rule (alternatives: Alternative<'a> list) =
-        let choices = alternatives |> List.map (fun alternative ->
+    let private productionChoices (goal: ConstructionGoal) rule (alternatives: Alternative<'a> list) =
+        alternatives |> List.map (fun alternative ->
             {Step={Goal=goal.Id;Rule=rule;Choice=alternative.Key;Dependencies=goal.Requires
                    Parts=alternative.Parts |> List.map _.Id;Bodies=alternative.Bodies;Cost=alternative.Cost
                    Introduced=alternative.Introduces |> List.map _.Id;Bonds=alternative.Bonds}
              Introduces=alternative.Introduces})
+    let private resolve (proof: ConstructionProof) (goal: ConstructionGoal) rule (alternatives: Alternative<'a> list) =
+        let choices = productionChoices goal rule alternatives
         match proof.Steps |> List.tryFind (fun s -> s.Goal=goal.Id) with
         | None -> Error(Branch(goal.Id,choices))
         | Some step ->
@@ -60,15 +62,13 @@ module WalkerConstructionTheory =
                     for index in 0..planes.Length-1 do
                         yield $"packaging-bearing-{body}-{index}",[body;ground]
         ]
-        let mutable previousSupport = None
+        let axleGoals = supports |> List.map fst |> List.filter (fun id -> id.StartsWith "axle-")
         let details = supports |> List.map (fun (id,bodies) ->
             let axle = id.StartsWith "axle-"
             let requirements =
                 if axle then ["walking";"drive";"targets";"motor-mount"]
                 else ["frame";"walking";"targets";"drive";"motor-mount"]
-                     @ (if id.StartsWith "packaging-bearing-" then ["axle-"+bodies.Head] else [])
-                     @ Option.toList previousSupport
-            if not axle then previousSupport <- Some id
+                     @ axleGoals
             goal id (if axle then "axle-stock" else "mount-and-bearing") (String.concat "," bodies) requirements false)
         let brackets = details |> List.filter (fun g -> g.Kind="mount-and-bearing")
         let bondGoals = brackets |> List.map (fun bracket ->
@@ -153,7 +153,7 @@ module WalkerConstructionTheory =
 
     let private goals (request: WalkerPackagingRequest) =
         let ground = request.Program.Bodies |> List.find _.Grounded |> _.Id
-        [goal "frame" "retained-scaffold" ground [] false
+        [goal "frame" "socket-preserving-scaffold" ground [] false
          goal "walking" "link-and-connector-realization" "retained walking mechanism" ["frame"] false
          goal "targets" "component-placement" "battery,receiver,motor" ["frame";"walking"] false
          goal "drive" "required-drive-geometry" request.Drive.Root ["walking";"targets"] false]
@@ -416,6 +416,17 @@ module WalkerConstructionTheory =
     let motionTargetOptions request screened = motionTargetOptionsObserved None request screened
 
     let expansionObserved inspect (request: WalkerPackagingRequest) oracleScope =
+        let mutable counterfactual = false
+        let mutable counterfactualToken = System.Threading.CancellationToken.None
+        let inspect = Some(
+            fun produce ->
+                let reducing = counterfactual
+                if reducing then counterfactualToken.ThrowIfCancellationRequested()
+                inspect |> Option.iter (fun report ->
+                    report (fun () ->
+                        let entry: WalkerConstructionInspection = produce ()
+                        if reducing then {entry with Goal="conflict-reduction";Rule="finite-axle-counterfactual"}
+                        else entry)))
         let expectedScope = scope request oracleScope
         let rootGoals = goals request
         let reference = Realization.screen request.Reference 72 |> Result.defaultWith (Realization.json >> invalidArg "reference")
@@ -424,10 +435,11 @@ module WalkerConstructionTheory =
         let cachedMotion = reference,screened,frames
         let routeCache = Dictionary<string,(WalkerPlacement list * WalkerPlacement list) list>()
         let spaceCache = Dictionary<string,Result<WalkerMotionSpace.Space,GateDecision>>()
+        let fitCache = Dictionary<string * string * WalkerPlacement,bool>()
         let targetCache = Dictionary<string,Result<WalkerComponentTarget list list,GateDecision>>()
         let driveCache = Dictionary<string,WalkerPackagingRequest list>()
         let buildCache = Dictionary<string,Result<WalkerPackagingConstruction,GateDecision>>()
-        let frame,remove = WalkerPackaging.scaffold request
+        let _,remove = WalkerPackaging.scaffold request
         let ground = request.Program.Bodies |> List.find _.Grounded |> _.Id
         let knownBodies = request.Program.Bodies |> List.map _.Id |> Set.ofList
         let driveBodies = request.Drive.Gears |> List.map fst |> Set.ofList
@@ -438,47 +450,56 @@ module WalkerConstructionTheory =
             (source.Bodies |> List.filter (fun b -> b.Body<>ground && knownBodies.Contains b.Body) |> List.collect _.Parts)
             @ (source.Connections |> List.filter (fun c -> not(c.Hinges |> List.exists bearingIds.Contains)) |> List.map _.Placement)
             |> List.filter (fun p -> not(remove.Contains p.Id))
-        let fixedOption parts bodies value =
-            [{Key=identity parts;Parts=parts;Bodies=bodies;Cost=0.0;            Value=value;Introduces=[];Bonds=[]}]
+        let frames =
+            lazy (WalkerScaffold.optionsObserved inspect request screened |> Result.map (List.mapi (fun index source ->
+                let frame,removed = WalkerPackaging.scaffold {request with Source=source}
+                let parts = frame @ (source.Mounts |> List.filter (fun p -> not(removed.Contains p.Id)))
+                {Key=identity source;Parts=parts;Bodies=[ground];Cost=float index;Value=source;Introduces=[];Bonds=[]})))
         let memo = Dictionary<string,ConstructionExpansion<WalkerPackagingConstruction>>()
         let repairsMemo = Dictionary<string,WalkerGenome list>()
+        let axleDomains = Dictionary<string * string,ConstructionChoice list>()
+        let minimizedFamilies = HashSet<string>()
+        let familyKey (proof: ConstructionProof) =
+            let kinds = proof.Goals |> List.map (fun goal -> goal.Id,goal.Kind) |> Map.ofList
+            identity (proof.Steps |> List.filter (fun step ->
+                not(List.contains kinds[step.Goal] ["axle-stock";"mount-and-bearing";"rigid-port-bonds";"rigid-path-to-frame"])))
         let expand (proof: ConstructionProof) (nogoods: ConstructionNogood list) =
             if proof.Scope<>expectedScope then invalidArg "checkpoint" "Construction request/oracle scope changed."
             let selectedDrive = proof.Steps |> List.tryFind (fun s -> s.Goal="drive")
             if selectedDrive.IsNone && proof.Goals<>rootGoals then
                 invalidArg "checkpoint" "Construction obligations differ from the frozen theory."
             ConstructionSearch.validate proof |> ignore
-            let cacheKey = identity (ConstructionSearch.nodeId proof,nogoods)
+            let feedback = nogoods |> List.map _.Feedback |> List.filter (fun f ->
+                List.contains f.Reason ["rigid-body-partition";"joint-port-engagement";"initial-self-interference";"motion-clearance"])
+            let cacheKey = identity (ConstructionSearch.nodeId proof,feedback)
             match memo.TryGetValue cacheKey with
             | true,result -> result
             | _ ->
                 let byGoal = proof.Goals |> List.map (fun g -> g.Id,g) |> Map.ofList
-                let frameParts = frame @ (request.Source.Mounts |> List.filter (fun p -> not(remove.Contains p.Id)))
                 let result =
-                    resolve proof byGoal["frame"] "retain-ground-scaffold" (fixedOption frameParts [ground] ())
-                    |> Result.bind (fun () ->
+                    (frames.Value |> Result.mapError Blocked)
+                    |> Result.bind (resolve proof byGoal["frame"] "socket-preserving-scaffold")
+                    |> Result.bind (fun frameSource ->
                         let sourceParts =
                             ((request.Source.Bodies |> List.collect _.Parts) @ (request.Source.Connections |> List.map _.Placement))
                             |> List.map _.Id |> Set.ofList
-                        let feedback = nogoods |> List.map _.Feedback |> List.filter (fun f ->
-                            List.contains f.Reason ["rigid-body-partition";"joint-port-engagement";"initial-self-interference";"motion-clearance"])
                         let repaired = feedback |> List.collect (fun f ->
                             let parts = f.Parts |> List.filter sourceParts.Contains
                             let bodies = f.Bodies |> List.filter knownBodies.Contains
                             if (parts @ bodies).IsEmpty then []
                             else
                                 let hint: WalkerConstructionFeedback = {Kind=f.Reason;Parts=parts;Bodies=bodies}
-                                let key = identity hint
+                                let key = identity (frameSource,hint)
                                 match repairsMemo.TryGetValue key with
                                 | true,genomes -> genomes
                                 | _ ->
-                                    let choices = WalkerConstruction.repairs reference request.Source hint 8 |> List.map _.Genome
+                                    let choices = WalkerConstruction.repairs reference frameSource hint 8 |> List.map _.Genome
                                     repairsMemo.Add(key,choices)
                                     choices)
                         let options =
-                            request.Source::repaired |> List.distinctBy identity |> List.map (fun source ->
+                            frameSource::repaired |> List.distinctBy identity |> List.map (fun source ->
                                 {Key=identity source;Parts=inherited source;Bodies=source.Bodies |> List.filter (fun b -> b.Body<>ground) |> List.map _.Body
-                                 Cost=(if source=request.Source then 0.0 else 5.0);Value=source;Introduces=[];Bonds=[]})
+                                 Cost=(if source=frameSource then 0.0 else 5.0);Value=source;Introduces=[];Bonds=[]})
                         resolve proof byGoal["walking"] "import-or-feedback-link-and-pin-production" options)
                     |> Result.bind (fun source ->
                         let targetKey = identity source
@@ -486,7 +507,8 @@ module WalkerConstructionTheory =
                             match targetCache.TryGetValue targetKey with
                             | true,options -> options
                             | _ ->
-                                let options = motionTargetOptionsObserved inspect {request with Source=source} screened
+                                let options = motionTargetOptionsObserved inspect
+                                                  {request with Source=source;Balance=WalkerScaffold.balanceForSource request source} screened
                                 targetCache.Add(targetKey,options)
                                 options
                         let placements = options |> Result.map (List.mapi (fun index targets ->
@@ -503,7 +525,8 @@ module WalkerConstructionTheory =
                                 match driveCache.TryGetValue key with
                                 | true,routes -> routes
                                 | _ ->
-                                    let routes = motorDriveOptions {request with Source=source;Targets=targets}
+                                    let routes = motorDriveOptions
+                                                     {request with Source=source;Targets=targets;Balance=WalkerScaffold.balanceForSource request source}
                                     driveCache.Add(key,routes)
                                     routes
                             let alternatives = routes |> List.mapi (fun index route ->
@@ -535,7 +558,17 @@ module WalkerConstructionTheory =
                                 {Key=identity parts;Parts=(if plannedMount then [] else parts);Bodies=bodies
                                  Cost=cost+float index;Value=index
                                  Introduces=(if plannedMount then [] else additionalBeamGoals key (parts |> List.map _.Id));Bonds=[]})
-                            match resolve proof byGoal[key] rule options with
+                            let goal = byGoal[key]
+                            if goal.Kind="axle-stock" then
+                                axleDomains[(familyKey proof,key)] <- productionChoices goal rule options
+                            let goal =
+                                if goal.Kind<>"mount-and-bearing" then goal
+                                else
+                                    let prior = proof.Steps |> List.filter (fun step ->
+                                        replayed.Contains step.Goal && byGoal[step.Goal].Kind="mount-and-bearing")
+                                                           |> List.map _.Goal
+                                    {goal with Requires=goal.Requires @ prior}
+                            match resolve proof goal rule options with
                             | Ok index -> replayed <- replayed.Add key;Some index
                             | Error branch -> unresolved <- Some branch;None
                         let physicalSteps = proof.Steps |> List.filter (fun step ->
@@ -547,11 +580,19 @@ module WalkerConstructionTheory =
                                 replayed <- physicalSteps |> List.map _.Goal |> Set.ofList
                                 outcome
                             | _ ->
-                                let outcome = WalkerPackaging.replayObserved inspect {route with Source=source} cachedMotion routeCache spaceCache choose
+                                let outcome = WalkerPackaging.replayObserved inspect {route with Source=source} cachedMotion routeCache spaceCache fitCache choose
                                 if unresolved.IsNone then buildCache.Add(physicalKey,outcome)
                                 outcome
                         match unresolved,outcome with
                         | Some branch,_ -> Error branch
+                        | None,Error gate when gate.Code="bounded-support-domain-empty" ->
+                            let implicated = gate.Diagnostics |> List.skip 1 |> Set.ofList
+                            let bindings =
+                                physicalSteps |> List.filter (fun step ->
+                                    byGoal[step.Goal].Kind<>"mount-and-bearing"
+                                    || step.Parts |> List.exists implicated.Contains)
+                                |> List.map (fun step -> step.Goal,step.Choice)
+                            Error(BlockedBy(gate,bindings))
                         | None,Error gate -> Error(Blocked gate)
                         | None,Ok construction ->
                             if (physicalSteps |> List.map _.Goal |> Set.ofList)<>replayed then
@@ -567,6 +608,7 @@ module WalkerConstructionTheory =
                             @ (genome.Connections |> List.map _.Placement)
                             |> List.map (fun p -> p.Id,p) |> Map.ofList
                         let producers = proof.Steps |> List.collect (fun s -> s.Parts |> List.map (fun id -> id,s.Goal)) |> Map.ofList
+                        let frame = construction.RetainedFramePartIds |> List.map (fun id -> placements[id])
                         let bondGoals = proof.Goals |> List.filter (fun g -> g.Kind="rigid-port-bonds")
                         let bondsResult = bondGoals |> List.fold (fun result bondGoal ->
                             result |> Result.bind (fun bonds ->
@@ -608,7 +650,49 @@ module WalkerConstructionTheory =
                         | Error expansion -> expansion
                 memo.Add(cacheKey,result)
                 result
-        expand
+        fun proof nogoods ->
+            let outcome = expand proof nogoods
+            match outcome with
+            | BlockedBy(gate,bindings) ->
+                let kinds = proof.Goals |> List.map (fun goal -> goal.Id,goal.Kind) |> Map.ofList
+                let axles = proof.Steps |> List.filter (fun step -> kinds[step.Goal]="axle-stock")
+                let family = familyKey proof
+                if gate.Code<>"bounded-support-domain-empty" || axles.IsEmpty
+                   || (proof.Steps |> List.exists (fun step -> kinds[step.Goal]="mount-and-bearing"))
+                   || not(minimizedFamilies.Add family) then outcome
+                else
+                    // Axle domains are independent until supports and the selected bearing reservations are installed.
+                    let domains =
+                        axles |> List.rev |> List.choose (fun step ->
+                            match axleDomains.TryGetValue((family,step.Goal)) with
+                            | true,choices -> Some(step.Goal,choices |> List.map (fun c -> c.Step.Choice))
+                            | _ -> None)
+                        |> List.sortBy (fun (_,choices) -> choices.Length)
+                    use cancellation = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds 2.0)
+                    let rejects assignment =
+                        let values = Map.ofList assignment
+                        let steps = proof.Steps |> List.map (fun step ->
+                            if kinds[step.Goal]<>"axle-stock" || values[step.Goal]=step.Choice then step
+                            else
+                                axleDomains[(family,step.Goal)] |> List.find (fun choice -> choice.Step.Choice=values[step.Goal]) |> _.Step)
+                        counterfactual <- true
+                        counterfactualToken <- cancellation.Token
+                        try
+                            try
+                                counterfactualToken.ThrowIfCancellationRequested()
+                                Some(match expand {proof with Steps=steps} nogoods with
+                                     | BlockedBy(other,_) -> other.Code="bounded-support-domain-empty"
+                                     | _ -> false)
+                            with
+                            | :? OperationCanceledException as error when error.CancellationToken=cancellation.Token -> None
+                        finally
+                            counterfactual <- false
+                            counterfactualToken <- System.Threading.CancellationToken.None
+                    let reduced,checks = ConstructionSearch.minimizeFiniteConflict 32 bindings domains rejects
+                    let diagnostics = gate.Diagnostics @ [$"finite-conflict-checks={checks}"]
+                                      @ (if cancellation.IsCancellationRequested then ["finite-conflict-budget-exhausted"] else [])
+                    BlockedBy({gate with Diagnostics=diagnostics},reduced)
+            | _ -> outcome
 
     let expansion request oracleScope = expansionObserved None request oracleScope
 

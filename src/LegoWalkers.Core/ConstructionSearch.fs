@@ -80,14 +80,48 @@ type ConstructionExpansion<'witness> =
     | Branch of goal: string * choices: ConstructionChoice list
     | Built of identity: string * witness: 'witness
     | Blocked of GateDecision
+    | BlockedBy of gate: GateDecision * bindings: (string * string) list
 
 module ConstructionSearch =
-    let version = "obligation-search-v6"
+    let version = "obligation-search-v8"
     let private require condition message = if not condition then invalidArg "construction-proof" message
     let private nonempty (text: string) = not(String.IsNullOrWhiteSpace text)
     let private distinct items = List.length items=(Set.ofList items).Count
     let nodeId (proof: ConstructionProof) =
         Export.sha256 (Realization.json (proof.Scope,proof.Steps |> List.map (fun s -> s.Goal,s.Choice)))
+
+    let minimizeFiniteConflict maximumChecks bindings domains rejects =
+        require (maximumChecks>=0 && not(List.isEmpty bindings) && distinct (List.map fst bindings))
+                "Conflict reduction needs distinct bindings and a nonnegative check budget."
+        let original = Map.ofList bindings
+        require (distinct (List.map fst domains)
+                 && (domains |> List.forall (fun (goal,choices) ->
+                     original.ContainsKey goal && not(List.isEmpty choices) && distinct choices
+                     && List.contains original[goal] choices)))
+                "Every finite domain must contain its current binding and distinct alternatives."
+        let mutable checks = 0
+        let mutable interrupted = false
+        let mutable remaining = bindings
+        let mutable freed = []
+        for goal,choices in domains do
+            let proposed = freed @ [goal,choices]
+            let budget = maximumChecks-checks
+            let count = proposed |> List.fold (fun count (_,choices) ->
+                if count>budget || choices.Length>budget/max 1 count then budget+1
+                else count*choices.Length) 1
+            if not interrupted && count<=budget then
+                let assignments = proposed |> List.fold (fun assignments (goal,choices) ->
+                    assignments |> List.collect (fun values -> choices |> List.map (fun choice -> Map.add goal choice values))) [Map.empty]
+                let allRejected = assignments |> List.forall (fun values ->
+                    let assignment = bindings |> List.map (fun (goal,choice) ->
+                        goal,Map.tryFind goal values |> Option.defaultValue choice)
+                    match rejects assignment with
+                    | Some rejected -> checks<-checks+1;rejected
+                    | None -> interrupted<-true;false)
+                if allRejected then
+                    freed <- proposed
+                    remaining <- remaining |> List.filter (fun (id,_) -> id<>goal)
+        remaining,checks
 
     let validate (proof: ConstructionProof) =
         require (nonempty proof.Scope && distinct (proof.Goals |> List.map _.Id)) "Scope and unique goal IDs are required."
@@ -278,6 +312,18 @@ module ConstructionSearch =
                 | Blocked gate ->
                     require (gate.Outcome="reject") "A blocked production must return an explicit rejection."
                     state <- {state with Rejections=state.Rejections @ [gate]}
+                | BlockedBy(gate,bindings) ->
+                    require (gate.Outcome="reject" && not bindings.IsEmpty && distinct bindings)
+                            "A local conflict requires rejection and nonempty distinct causal bindings."
+                    let values = proof.Steps |> List.map (fun s -> s.Goal,s.Choice) |> Map.ofList
+                    require (bindings |> List.forall (fun (goal,choice) -> Map.tryFind goal values=Some choice))
+                            "Local conflict bindings must name decisions in the current proof."
+                    let feedback =
+                        {Scope=proof.Scope;EvidenceSha256=Export.sha256(Realization.json (gate,bindings))
+                         Reason=gate.Code;Parts=gate.Diagnostics;Bodies=[];Exact=true}
+                    let nogood = {Feedback=feedback;Bindings=bindings;Targets=bindings |> List.map fst;Focus=[]}
+                    state <- {state with Nogoods=(state.Nogoods @ [nogood] |> List.distinct)
+                                         Rejections=state.Rejections @ [gate]}
                 | Branch(goal,choices) ->
                     require (choices |> List.forall (fun c -> c.Step.Goal=goal)) "Branch choices must discharge the requested goal."
                     if choices.IsEmpty then

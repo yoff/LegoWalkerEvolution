@@ -160,6 +160,64 @@ transmission topology. Already-compound drivetrains retain their existing planes
 Centering is an alternative, not a bypass: retained rails, bridges and walking
 stock may rule out every inward position even when a gear route exists.
 
+The scaffold is now a bounded production, not a singleton inherited frame.
+Up to twelve alternatives relocate the existing connected backbone upward and,
+where clearance permits, along X/Z, then route stock beams and covered friction
+pins back to free sockets on the retained walking-interface parts. Walking pivot
+positions/axes and linkage motion are unchanged; old frame attachment pins can
+be replaced. The inherited scaffold remains a fallback (preferred when all
+hardware target tolerances are zero). This is a backbone-relocation/reconnection
+grammar, not arbitrary chassis topology synthesis. Every new scaffold still
+requires ordinary complete-assembly geometry, connectivity and admission checks.
+
+Before choosing individual supports, the builder forward-checks each bounded
+support domain against the selected hardware, gait and bearing axes. Exact
+per-part checks are cached by geometry, owner and immutable collision context.
+Gait/hardware checks and individual bearing-axis checks have separate cache
+entries, so changing one axle does not repeat the complete gait calculation.
+Ground checks prepare fixed candidate corners and roll/pitch factors once
+instead of rebuilding them for every prescribed gait phase.
+Motion-prefix pruning covers the two-beam base case as well as extensions,
+before each topology's 512-candidate cutoff. Rejected short routes therefore
+cannot consume that bound and force unnecessary three-to-five-beam search.
+Base routes stream lazily in the existing length/anchor order, stopping once
+the requested motion-clear routes are found instead of materializing and
+sorting every geometric candidate.
+Each topology also has a 1,024-candidate geometric work bound for its base-pruned
+stream. Reaching it enables a legacy-order fallback with a 4,096-candidate work
+bound; each stream still admits at most 512 full candidates for final checks.
+The additional work bounds prevent deeply blocked prefixes from expanding
+hundreds of thousands of partial candidates without producing a complete route.
+Fallbacks retain the previous bounded route strategy, but neither stream claims
+exhaustive physical coverage.
+Actual support domains also include previously selected connector occupancy;
+empty-domain explanations retain all decisions affecting that enumeration.
+The smallest initial support domains are selected first. Candidate connectors
+are checked against remaining support domains before branching: a surviving
+cached route supplies a compatibility witness; otherwise the bounded domain
+is regenerated with the prospective occupancy. An empty regenerated domain
+rejects that candidate, not every possible route or physical construction.
+Every selected support records its actual preceding support dependencies.
+Scope-bound local nogoods prune matching frontier branches, avoiding unrelated
+backtracking when a domain fails independently of those choices. Learned nogoods
+can omit axle choices only after checking every joint combination of the freed
+finite axle domains. This minimization is limited to 32 counterfactual evaluations
+and a two-second cooperative cancellation budget,
+once per selected scaffold/walking/hardware/drivetrain/motor-motif family, and only
+before any support has been selected. Incomplete checking leaves bindings intact;
+individually irrelevant choices are not assumed jointly irrelevant. These extra
+propagation checks are not main proof-state visits or dynamic simulation trials.
+Learned nogoods
+are retained in search checkpoints; they are not transplanted into different
+requests or simulator/oracle versions. Live snapshots report learned-conflict
+counts alongside checked/rejected parts and cache hits. Compact rejection events
+record every failure and its bindings without the visualization throttle.
+Only repair-relevant feedback invalidates replay caches; scaffold identity is
+included when caching walking repairs. Search remains bounded
+depth-first feasibility search, not globally optimal branch-and-bound.
+Exhausting a truncated domain is a failure of this bounded grammar, never a
+proof that no physical construction exists.
+
 When source mass estimation succeeds, joint motor/battery/receiver layouts are
 ranked before support routing by squared horizontal COM offset, normalized by
 the sampled swept-foot half-spans. Battery corrections are recomputed for each
@@ -170,8 +228,10 @@ component centers and support bounds are saved in `balance-model.json` and passe
 through CLI `--balance-model FILE`. The model is part of the exact request scope.
 No model is supplied for layout-preserving repairs or when source mass estimation
 fails; the existing explicit diagnostic and geometric search remain in effect.
-This is a preference, not a rejection or qualification: source mass excludes
-new supports, and swept-foot bounds are not simultaneous stance contacts.
+Measured source scaffold masses adjust the COM estimate for relocated parts
+and removed attachment pins before hardware ranking. This is a preference, not
+a rejection or qualification: source mass excludes new scaffold/support routes,
+and swept-foot bounds are not simultaneous stance contacts.
 Preparation compares the compiler's reported construction-policy versions to
 the current implementation and rejects a stale CLI instead of freezing newer
 source beside older executable behavior. Rebuild the CLI before preparing.

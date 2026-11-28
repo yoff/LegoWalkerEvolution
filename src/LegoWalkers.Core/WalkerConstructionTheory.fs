@@ -4,7 +4,7 @@ open System
 open System.Collections.Generic
 
 module WalkerConstructionTheory =
-    let version = "walker-construction-theory-v31"
+    let version = "walker-construction-theory-v34"
     let familyStatesPerSlice = 16
     let familyKinds =
         ["socket-preserving-scaffold";"link-and-connector-realization";"component-placement"
@@ -154,6 +154,18 @@ module WalkerConstructionTheory =
                 [{Connector=pin.Id;PartA=a.Id;PositionA=pointA;AxisA=axisA
                   PartB=b.Id;PositionB=pointB;AxisB=axisB}]
             | _ -> [])
+
+    let supportRouteGate prefix parts frame targets =
+        let bonds = bracketBonds prefix parts frame targets
+        let unsupported = parts |> List.filter (fun pin ->
+            (Catalog.get pin.Part).Connector=Some FrictionPin && not(bonds |> List.exists (fun bond -> bond.Connector=pin.Id)))
+        if not unsupported.IsEmpty then
+            Some {Gate="construction-connectivity";Outcome="reject";Code="unproved-rigid-pin-bond";Diagnostics=unsupported |> List.map _.Id}
+        else
+            let connected = reachable (frame |> List.map _.Id |> Set.ofList) bonds
+            let missing = parts |> List.filter (fun part -> (Catalog.get part.Part).Connector.IsNone && not(connected.Contains part.Id))
+            if missing.IsEmpty then None
+            else Some {Gate="construction-connectivity";Outcome="reject";Code="unproved-rigid-path";Diagnostics=missing |> List.map _.Id}
 
     let private goals (request: WalkerPackagingRequest) =
         let ground = request.Program.Bodies |> List.find _.Grounded |> _.Id
@@ -420,7 +432,7 @@ module WalkerConstructionTheory =
 
     let motionTargetOptions request screened = motionTargetOptionsObserved None request screened
 
-    let expansionObserved inspect (request: WalkerPackagingRequest) oracleScope =
+    let expansionPlannedObserved (planner: ConstructionJointPlanner option) inspect (request: WalkerPackagingRequest) oracleScope =
         let mutable counterfactual = false
         let mutable counterfactualToken = System.Threading.CancellationToken.None
         let inspect = Some(
@@ -444,6 +456,10 @@ module WalkerConstructionTheory =
         let targetCache = Dictionary<string,Result<WalkerComponentTarget list list,GateDecision>>()
         let driveCache = Dictionary<string,WalkerPackagingRequest list>()
         let buildCache = Dictionary<string,Result<WalkerPackagingConstruction,GateDecision>>()
+        let jointProblems = Dictionary<string,ConstructionJointProblem>()
+        let jointPlans = Dictionary<string,(string * string) list * ConstructionJointPlan>()
+        let routeGates = Dictionary<string * string * string,GateDecision option>()
+        let planWarnings = HashSet<string * string>()
         let _,remove = WalkerPackaging.scaffold request
         let ground = request.Program.Bodies |> List.find _.Grounded |> _.Id
         let knownBodies = request.Program.Bodies |> List.map _.Id |> Set.ofList
@@ -550,6 +566,58 @@ module WalkerConstructionTheory =
                     |> Result.bind (fun (source,route) ->
                         let mutable unresolved = None
                         let mutable replayed = Set.ofList ["frame";"walking";"targets";"drive"]
+                        let mutable preferred: Map<string,string> = Map.empty
+                        let mutable activeProblem = None
+                        let planning =
+                            if counterfactual then None
+                            else planner |> Option.map (fun planner ->
+                                let frame,_ = WalkerPackaging.scaffold {route with Source=source}
+                                let targets = route.Targets |> List.map _.Placement
+                                let context = identity(frame,targets)
+                                {Scope=expectedScope;Cache=jointProblems
+                                 CheckRoute=fun prefix parts ->
+                                     let key = context,prefix,identity parts
+                                     match routeGates.TryGetValue key with
+                                     | true,gate -> gate
+                                     | _ ->
+                                         let gate = supportRouteGate prefix parts frame targets
+                                         routeGates.Add(key,gate)
+                                         gate
+                                 Select=fun problem ->
+                                     activeProblem <- Some problem
+                                     let goals = problem.Requirements |> List.map _.Goal |> Set.ofList
+                                     let selected = proof.Steps |> List.filter (fun step -> goals.Contains step.Goal)
+                                                    |> List.map (fun step -> step.Goal,step.Choice)
+                                     let fixedBindings = proof.Steps |> List.filter (fun step -> not(goals.Contains step.Goal))
+                                                         |> List.map (fun step -> step.Goal,step.Choice)
+                                     let fixedValues = Map.ofList fixedBindings
+                                     let choices = problem.Requirements |> List.collect (fun requirement ->
+                                         requirement.Choices |> List.map (fun choice -> requirement.Goal,choice.Key)) |> Set.ofList
+                                     let facts = nogoods |> List.filter (fun nogood ->
+                                         nogood.Feedback.Exact && nogood.Feedback.Scope=expectedScope
+                                         && (nogood.Bindings |> List.forall (fun ((goal,value) as binding) ->
+                                             if goals.Contains goal then choices.Contains binding else Map.tryFind goal fixedValues=Some value)))
+                                                 |> List.map _.Bindings
+                                     let key = identity(problem.Id,fixedBindings,facts)
+                                     let cached =
+                                         match jointPlans.TryGetValue key with
+                                         | true,(_,JointPlanned assignments) when selected |> List.forall (fun binding -> List.contains binding assignments) ->
+                                             Some(JointPlanned assignments)
+                                         | true,(assumed,result) when assumed |> List.forall (fun binding -> List.contains binding selected) ->
+                                             match result with JointPlanned _ -> None | _ -> Some result
+                                         | _ -> None
+                                     let result =
+                                         match cached with
+                                         | Some result -> result
+                                         | None ->
+                                             let result = planner.Solve proof nogoods problem
+                                             planner.Report problem result
+                                             jointPlans[key] <- selected,result
+                                             result
+                                     match result with
+                                     | JointPlanned assignments -> preferred <- Map.ofList assignments
+                                     | JointBlocked _ | JointInconclusive _ -> preferred <- Map.empty
+                                     result})
                         let choose key rule bodies (alternatives: WalkerPlacement list list) =
                             if unresolved.IsSome then invalidOp "The realizer continued beyond an unresolved production."
                             if not(byGoal.ContainsKey key) then invalidArg "checkpoint" $"Unknown construction obligation {key}."
@@ -575,6 +643,15 @@ module WalkerConstructionTheory =
                                     {goal with Requires=goal.Requires @ prior}
                             match resolve proof goal rule options with
                             | Ok index -> replayed <- replayed.Add key;Some index
+                            | Error(Branch(goal,choices)) when preferred.ContainsKey key ->
+                                let value = preferred[key]
+                                if choices |> List.exists (fun choice -> choice.Step.Choice=value) then
+                                    unresolved <- Some(GuidedBranch(goal,choices,value))
+                                else
+                                    if planWarnings.Add(activeProblem.Value.Id,key) then
+                                        planner.Value.Report activeProblem.Value (JointInconclusive $"Planned route is outside the replayed domain for {key}; retaining regenerated alternatives.")
+                                    unresolved <- Some(Branch(goal,choices))
+                                None
                             | Error branch -> unresolved <- Some branch;None
                         let physicalSteps = proof.Steps |> List.filter (fun step ->
                             not(List.contains byGoal[step.Goal].Kind ["rigid-port-bonds";"rigid-path-to-frame"]))
@@ -585,11 +662,19 @@ module WalkerConstructionTheory =
                                 replayed <- physicalSteps |> List.map _.Goal |> Set.ofList
                                 outcome
                             | _ ->
-                                let outcome = WalkerPackaging.replayObserved inspect {route with Source=source} cachedMotion routeCache spaceCache fitCache choose
+                                let outcome =
+                                    match planning with
+                                    | None -> WalkerPackaging.replayObserved inspect {route with Source=source} cachedMotion routeCache spaceCache fitCache choose
+                                    | Some planning ->
+                                        WalkerPackaging.replayPlannedObserved planning inspect {route with Source=source} cachedMotion routeCache spaceCache fitCache choose
                                 if unresolved.IsNone then buildCache.Add(physicalKey,outcome)
                                 outcome
                         match unresolved,outcome with
                         | Some branch,_ -> Error branch
+                        | None,Error gate when gate.Code="retained-nonfoot-ground-clearance" ->
+                            let bindings = physicalSteps |> List.filter (fun step -> List.contains step.Goal ["frame";"walking";"drive"])
+                                           |> List.map (fun step -> step.Goal,step.Choice)
+                            Error(BlockedBy(gate,bindings))
                         | None,Error gate when gate.Code="bounded-support-domain-empty" ->
                             let implicated = gate.Diagnostics |> List.skip 1 |> Set.ofList
                             let bindings =
@@ -708,12 +793,13 @@ module WalkerConstructionTheory =
                     BlockedBy({gate with Diagnostics=gate.Diagnostics @ [$"covered-conflict-checks={checks}"]},covered)
             | _ -> outcome
 
+    let expansionObserved inspect request oracleScope = expansionPlannedObserved None inspect request oracleScope
     let expansion request oracleScope = expansionObserved None request oracleScope
 
-    let advanceObserved observe inspect request oracleScope state =
+    let advanceObserved observe inspect request oracleScope (state: ConstructionSearchState) =
         if state.Scope<>scope request oracleScope then invalidArg "checkpoint" "Frozen request/oracle scope changed."
         ConstructionSearch.nextObserved observe (expansionObserved (Some inspect) request oracleScope) state
 
-    let advance request oracleScope state =
+    let advance request oracleScope (state: ConstructionSearchState) =
         if state.Scope<>scope request oracleScope then invalidArg "checkpoint" "Frozen request/oracle scope changed."
         ConstructionSearch.next (expansion request oracleScope) state

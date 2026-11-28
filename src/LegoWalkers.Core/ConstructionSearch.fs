@@ -63,14 +63,30 @@ type ConstructionSchedule = {
     FamilyKinds: string list
     StatesPerSlice: int
     SliceVisited: int
+    SliceLimit: int
     FamilyVisits: (string * int) list
 }
+
+type ConstructionDomain = {
+    Bindings: (string * string) list
+    Goal: string
+    Choices: string list
+}
+
+type ConstructionConstraintVerdict =
+    | Consistent
+    | Inconsistent of bindings: (string * string) list
+    | Inconclusive of reason: string
 
 type ConstructionSearchState = {
     Scope: string
     Frontier: ConstructionProof list
     Deferred: ConstructionProof list
     Schedule: ConstructionSchedule option
+    Domains: ConstructionDomain list
+    ConstraintChecks: int
+    ConstraintPruned: int
+    ConstraintWarnings: string list
     Nogoods: ConstructionNogood list
     Refresh: ConstructionProof list
     SeenNodes: string list
@@ -87,12 +103,13 @@ type ConstructionSearchState = {
 
 type ConstructionExpansion<'witness> =
     | Branch of goal: string * choices: ConstructionChoice list
+    | GuidedBranch of goal: string * choices: ConstructionChoice list * preferred: string
     | Built of identity: string * witness: 'witness
     | Blocked of GateDecision
     | BlockedBy of gate: GateDecision * bindings: (string * string) list
 
 module ConstructionSearch =
-    let version = "obligation-search-v9"
+    let version = "obligation-search-v11"
     let private require condition message = if not condition then invalidArg "construction-proof" message
     let private nonempty (text: string) = not(String.IsNullOrWhiteSpace text)
     let private distinct items = List.length items=(Set.ofList items).Count
@@ -207,6 +224,7 @@ module ConstructionSearch =
                 "Search bounds must be within 1..16384 states and 1..1024 frontier nodes."
         let proof = validate {Scope=scope;Goals=goals;Steps=[]}
         {Scope=scope;Frontier=[proof];Deferred=[];Schedule=None
+         Domains=[];ConstraintChecks=0;ConstraintPruned=0;ConstraintWarnings=[]
          Nogoods=[];Refresh=[];SeenNodes=[];SeenWitnesses=[];Pending=None
          Visited=0;Pruned=0;Discarded=0;MaximumStates=maximumStates;MaximumFrontier=maximumFrontier
          Status="searching";Rejections=[]}
@@ -217,7 +235,7 @@ module ConstructionSearch =
                 "Family scheduling needs distinct goal kinds and a positive state slice."
         require (state.Visited=0) "Configure scheduling before visiting search states."
         {state with Schedule=Some {FamilyKinds=familyKinds;StatesPerSlice=statesPerSlice
-                                   SliceVisited=0;FamilyVisits=[]}}
+                                   SliceVisited=0;SliceLimit=statesPerSlice;FamilyVisits=[]}}
 
     let private bounded frontier state =
         let pending = frontier @ state.Deferred |> List.distinctBy nodeId
@@ -232,7 +250,7 @@ module ConstructionSearch =
 
     let private selectSlice state =
         match state.Schedule with
-        | Some schedule when schedule.SliceVisited>=schedule.StatesPerSlice ->
+        | Some schedule when schedule.SliceVisited>=schedule.SliceLimit ->
             let pending = state.Frontier @ state.Deferred
             let visits = Map.ofList schedule.FamilyVisits
             let score proof =
@@ -242,7 +260,9 @@ module ConstructionSearch =
             let selected = pending |> List.minBy score
             let key = nodeId selected
             let rest = pending |> List.filter (fun proof -> nodeId proof<>key)
-            bounded (selected::rest) {state with Deferred=[];Schedule=Some {schedule with SliceVisited=0}}
+            let limit = min (schedule.StatesPerSlice*8) (schedule.SliceLimit*2)
+            bounded (selected::rest) {state with Deferred=[];
+                                                Schedule=Some {schedule with SliceVisited=0;SliceLimit=limit}}
         | _ when state.Frontier.IsEmpty -> bounded [] state
         | _ -> state
 
@@ -282,7 +302,8 @@ module ConstructionSearch =
         // Without a separately validated causal lemma, only the exact failed witness is a hard nogood.
         let nogood = {Feedback=feedback;Bindings=proof.Steps |> List.map (fun s -> s.Goal,s.Choice);Targets=targets
                       Focus=proof.Steps |> List.filter (fun s -> relevant.Contains s.Goal) |> List.map _.Goal}
-        {state with Pending=None;Nogoods=state.Nogoods @ [nogood];Refresh=state.Refresh @ [proof];Status="searching"}
+        {state with Pending=None;Domains=[];Nogoods=state.Nogoods @ [nogood]
+                    Refresh=state.Refresh @ [proof];Status="searching"}
 
     let acceptVerified evidenceSha256 verifiedGoals state =
         require (nonempty evidenceSha256) "An oracle acceptance requires immutable evidence."
@@ -309,14 +330,24 @@ module ConstructionSearch =
                 "Connectivity and joint-preservation obligations require explicit verified-goal evidence."
         acceptVerified evidenceSha256 (openGoals proof |> List.map _.Id) state
 
-    let nextObserved observe (expand: ConstructionProof -> ConstructionNogood list -> ConstructionExpansion<'witness>) state =
+    let private withDomain (proof: ConstructionProof) goal (choices: ConstructionChoice list) state =
+        require (openGoals proof |> List.exists (fun candidate -> candidate.Id=goal)) "Branch must discharge an open goal."
+        require (choices |> List.forall (fun choice -> choice.Step.Goal=goal)) "Branch choices must discharge the requested goal."
+        let domain = {Bindings=proof.Steps |> List.map (fun step -> step.Goal,step.Choice)
+                      Goal=goal;Choices=choices |> List.map (fun choice -> choice.Step.Choice) |> List.distinct}
+        {state with Domains=List.distinct(state.Domains @ [domain])}
+
+    let nextObservedWithConstraints check observe (expand: ConstructionProof -> ConstructionNogood list -> ConstructionExpansion<'witness>) state =
         require state.Pending.IsNone "Resolve the pending oracle verdict before continuing search."
         require (state.Status<>"oracle-accepted") "Accepted searches are terminal."
         require (state.MaximumStates>=1 && state.MaximumStates<=16384
                  && state.MaximumFrontier>=1 && state.MaximumFrontier<=1024
-                 && state.Visited>=0 && state.Pruned>=0 && state.Discarded>=0) "Checkpoint search accounting or bounds are invalid."
+                 && state.Visited>=0 && state.Pruned>=0 && state.Discarded>=0
+                 && state.ConstraintChecks>=0 && state.ConstraintPruned>=0 && state.ConstraintPruned<=state.Pruned)
+                 "Checkpoint search accounting or bounds are invalid."
         state.Schedule |> Option.iter (fun schedule ->
             require (schedule.StatesPerSlice>=1 && schedule.SliceVisited>=0
+                     && schedule.SliceLimit>=schedule.StatesPerSlice && schedule.SliceLimit<=schedule.StatesPerSlice*8
                      && not schedule.FamilyKinds.IsEmpty && distinct schedule.FamilyKinds
                      && List.forall nonempty schedule.FamilyKinds
                      && distinct (schedule.FamilyVisits |> List.map fst)
@@ -338,7 +369,8 @@ module ConstructionSearch =
                     let prefix = {rejected with Steps=steps;Goals=goals}
                     state <- {state with Visited=state.Visited+1}
                     match expand prefix feedback with
-                    | Branch(goal,choices) when goal=step.Goal ->
+                    | Branch(goal,choices) | GuidedBranch(goal,choices,_) when goal=step.Goal ->
+                        state <- withDomain prefix goal choices state
                         for choice in choices |> List.sortBy (fun c -> c.Step.Cost,c.Step.Choice) do
                             if choice.Step.Choice<>step.Choice then
                                 let child = apply prefix choice
@@ -357,8 +389,30 @@ module ConstructionSearch =
             require (proof.Scope=state.Scope) "Frontier proof scope differs from the search."
             state <- {state with Frontier=state.Frontier.Tail}
             let key = nodeId proof
-            if forbidden state.Nogoods proof || List.contains key state.SeenNodes then
+            let alreadyPruned = forbidden state.Nogoods proof || List.contains key state.SeenNodes
+            let verdict =
+                match check with
+                | Some check when not alreadyPruned ->
+                    state <- {state with ConstraintChecks=state.ConstraintChecks+1}
+                    check state proof
+                | _ -> Consistent
+            match verdict with
+            | Inconclusive reason ->
+                require (nonempty reason) "An inconclusive constraint check requires an explicit reason."
+                state <- {state with ConstraintWarnings=List.distinct(state.ConstraintWarnings @ [reason])}
+            | _ -> ()
+            if alreadyPruned then
                 state <- {state with Pruned=state.Pruned+1}
+            elif (match verdict with Inconsistent _ -> true | _ -> false) then
+                let bindings = match verdict with Inconsistent bindings -> bindings | _ -> []
+                let values = proof.Steps |> List.map (fun step -> step.Goal,step.Choice) |> Map.ofList
+                require (distinct bindings && (bindings |> List.forall (fun (goal,choice) -> Map.tryFind goal values=Some choice)))
+                        "Constraint explanations must name assumptions in the current proof."
+                let gate = {Gate="construction-constraints";Outcome="reject";Code="bounded-domain-inconsistent"
+                            Diagnostics=["Registered finite domains and exact scoped conflicts exclude this partial proof; not a proof of physical impossibility."]}
+                state <- {state with Pruned=state.Pruned+1;ConstraintPruned=state.ConstraintPruned+1
+                                     Rejections=state.Rejections @ [gate]}
+                observe state proof (Some(if bindings.IsEmpty then Blocked gate else BlockedBy(gate,bindings)))
             else
                 state <- {state with SeenNodes=key::state.SeenNodes;Visited=state.Visited+1}
                 state <- recordFamilyVisit proof state
@@ -381,13 +435,21 @@ module ConstructionSearch =
                     let nogood = {Feedback=feedback;Bindings=bindings;Targets=bindings |> List.map fst;Focus=[]}
                     state <- {state with Nogoods=(state.Nogoods @ [nogood] |> List.distinct)
                                          Rejections=state.Rejections @ [gate]}
-                | Branch(goal,choices) ->
-                    require (choices |> List.forall (fun c -> c.Step.Goal=goal)) "Branch choices must discharge the requested goal."
+                | Branch(goal,choices) | GuidedBranch(goal,choices,_) ->
+                    state <- withDomain proof goal choices state
+                    let preferred =
+                        match expansion with
+                        | GuidedBranch(_,_,value) ->
+                            require (choices |> List.exists (fun choice -> choice.Step.Choice=value)) "A guided branch must prefer an available choice."
+                            Some value
+                        | _ -> None
                     if choices.IsEmpty then
                         let gate = {Gate="construction-search";Outcome="reject";Code="no-applicable-production";Diagnostics=[goal]}
                         state <- {state with Rejections=state.Rejections @ [gate]}
                     else
-                        let children = choices |> List.sortBy (fun c -> c.Step.Cost,c.Step.Choice) |> List.map (apply proof)
+                        let children = choices |> List.sortBy (fun c ->
+                            (preferred |> Option.exists (fun value -> value<>c.Step.Choice)),c.Step.Cost,c.Step.Choice)
+                                               |> List.map (apply proof)
                         state <- bounded (children @ state.Frontier) state
                 | Built(identity,witness) ->
                     require (nonempty identity && (openGoals proof |> List.forall _.External))
@@ -404,4 +466,5 @@ module ConstructionSearch =
             state <- {state with Status=status}
         state,result
 
+    let nextObserved observe expand state = nextObservedWithConstraints None observe expand state
     let next expand state = nextObserved (fun _ _ _ -> ()) expand state

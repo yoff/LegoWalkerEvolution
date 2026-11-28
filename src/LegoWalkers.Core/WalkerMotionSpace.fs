@@ -22,10 +22,11 @@ type WalkerGroundPlan = {
     MechanismId: string
     Requirements: MotionGroundClearance
     Phases: MotionGroundPhase list
+    FootStacks: WalkerFootStack list
 }
 
 module WalkerMotionSpace =
-    let version = "sampled-motion-ground-reservation-v2"
+    let version = "sampled-motion-ground-reservation-v3"
     let toleranceLdu = 0.25
     let defaultGroundClearance = {
         MinimumNonFootClearanceLdu=8.0;MaximumRollRadians=0.0;MaximumPitchRadians=0.0;StanceToleranceLdu=1.0
@@ -195,6 +196,20 @@ module WalkerMotionSpace =
         let frames,failure = WalkerClearance.completeFrames s
         if failure.IsSome then invalidArg "ground-clearance" failure.Value
         let parts = g.Bodies |> List.collect (fun body -> body.Parts |> List.map (fun part -> part.Id,(body.Body,part))) |> Map.ofList
+        let physical: PartInstance list = parts |> Map.toList |> List.map (fun (_, (body,part)) ->
+            {Id=part.Id;Part=part.Part;Color=part.Color;Position=part.Position;Rotation=part.Rotation;Body=Some body})
+        let byId = physical |> List.map (fun part -> part.Id,part) |> Map.ofList
+        let stacks = g.Feet |> List.collect (fun foot ->
+            let output = s.Program.Feet |> List.find (fun output -> output.Id=foot.Foot)
+            WalkerFootChoice.contacts foot |> List.choose (fun contact ->
+                let part = byId[contact.Part]
+                if part.Part<>"3710.dat" then None else
+                if part.Body<>Some output.Port.Body || not(Double.IsFinite contact.Depth)
+                   || abs(part.Position.Z-contact.Depth)>1e-6 || abs(abs part.Rotation.Z.Z-1.0)>1e-6 then
+                    invalidArg "foot-stack" $"Contact {contact.Part} must be transverse and on its declared foot output and depth."
+                WalkerFootStack.tryCreate physical part
+                |> Option.orElseWith (fun () ->
+                    invalidArg "foot-stack" $"Contact {contact.Part} requires one or two aligned plates mounted on a 3701 brick.")))
         let ground = s.Program.Bodies |> List.find _.Grounded |> _.Id
         let phases = frames |> List.map (fun frame ->
             let soles = g.Feet |> List.map (fun foot ->
@@ -219,7 +234,7 @@ module WalkerMotionSpace =
              NominalBodyHeightLdu=groundY-frame.Poses[ground].Origin.Y
              StanceFeet=heights |> List.choose (fun (id,lift) -> if lift<=requirements.StanceToleranceLdu then Some id else None)
              SwingClearanceLdu=heights})
-        {MechanismId=s.MechanismId;Requirements=requirements;Phases=phases}
+        {MechanismId=s.MechanismId;Requirements=requirements;Phases=phases;FootStacks=stacks}
 
     let reserveWithGround requirements s g =
         reserve s g |> Result.map (fun space ->
@@ -228,6 +243,7 @@ module WalkerMotionSpace =
     let private groundViolations (plan: WalkerGroundPlan) =
         let r,p = plan.Requirements.MaximumRollRadians,plan.Requirements.MaximumPitchRadians
         let cr,cp,sr,sp = cos r,cos p,sin r,sin p
+        let stackParts = plan.FootStacks |> List.collect _.PartIds |> Set.ofList
         fun (phase: MotionGroundPhase) (placedCorners: (string * Vec3 list) list) ->
             seq {
                 for part,points in placedCorners do
@@ -235,9 +251,24 @@ module WalkerMotionSpace =
                         let delta = Vec3.subtract point phase.SupportCenter
                         -delta.Y*cr*cp-abs delta.X*sp-abs delta.Z*sr
                     let low = points.Tail |> List.fold (fun low point -> min low (height point)) (height points.Head)
-                    if low<plan.Requirements.MinimumNonFootClearanceLdu-1e-6 then
+                    let minimum = if stackParts.Contains part then 0.0 else plan.Requirements.MinimumNonFootClearanceLdu
+                    if low<minimum-1e-6 then
                         yield {Part=part;Obstacle="planned-ground-clearance";Body="ground";InputAngleRadians=phase.InputAngleRadians}
             }
+
+    let retainedGroundConflicts (space: Space) (nonFootParts: Set<string>) =
+        match space.GroundPlan with
+        | None -> []
+        | Some plan ->
+            let samples = space.Obstacles |> List.filter (fun obstacle -> nonFootParts.Contains obstacle.Part.Id)
+                          |> List.map (fun obstacle ->
+                              if obstacle.Poses.Length<>plan.Phases.Length ||
+                                 List.exists2 (fun (angle,_) (phase: MotionGroundPhase) -> angle<>phase.InputAngleRadians) obstacle.Poses plan.Phases then
+                                  invalidArg "ground-plan" "Reserved parts must cover the exact prescribed ground phases."
+                              obstacle.Part.Id,obstacle.Poses |> List.map (fun (_,boxes) -> boxes |> List.collect corners) |> List.toArray)
+            let check = groundViolations plan
+            plan.Phases |> List.indexed |> List.collect (fun (index,phase) ->
+                samples |> List.map (fun (part,points) -> part,points[index]) |> check phase |> Seq.toList)
 
     let auditGround (plan: WalkerGroundPlan) (s: ScreenedMotion) (g: WalkerGenome) =
         if plan.MechanismId<>s.MechanismId then invalidArg "ground-plan" "The ground plan belongs to a different mechanism."

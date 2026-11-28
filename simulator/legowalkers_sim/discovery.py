@@ -18,7 +18,7 @@ from .leg_family_migration import POLICY as LEG_FAMILY_MIGRATION
 from .motion_carry import POLICY as MOTION_CARRY_POLICY, construction_task, current_pending, ensure_pending, source_candidate
 
 POLICY = {
-    "version": "native-discovery-v40", "mutationVersion": "native-motion-mutations-v23",
+    "version": "native-discovery-v41", "mutationVersion": "native-motion-mutations-v23",
     "motionCarryForward": MOTION_CARRY_POLICY,
     "physicalDeduplication": "assembly-and-controller-v1; polarity and torque limit distinguish trials",
     "polarityFeedback": {"version": "safe-backward-gait-repair-v1", "maximumAttemptsPerBirth": 1,
@@ -77,9 +77,9 @@ POLICY = {
     "topologyMutation": True,
     "construction": {"version": "technic-construction-v11",
                      "motionFirstBuilder": {
-                         "version": "sampled-motion-ground-reservation-v2",
-                         "theoryVersion": "walker-construction-theory-v31",
-                         "packagingVersion": "packaging-realization-v27",
+                         "version": "sampled-motion-ground-reservation-v3",
+                         "theoryVersion": "walker-construction-theory-v34",
+                         "packagingVersion": "packaging-realization-v29",
                          "scaffold": "Search backbone relocations and stock reconnections to retained walking sockets; original chassis remains an alternative.",
                          "balance": "Prefer joint motor/battery/receiver layouts with smaller normalized source-mass COM offsets from swept-foot bounds before support routing; not dynamic qualification.",
                          "motorPlacement": "Coupled housing-centered/inward/outward axial placement and input-mesh plane routing; up to nine motor placements with one target assignment reserved per feasible placement.",
@@ -89,6 +89,7 @@ POLICY = {
                          "activation": "build-walker and construct-walker without feedback reserve the full geared gait before hardware/support placement.",
                          "maximumStates": 512, "maximumFrontier": 64, "maximumTargetAssignments": 32,
                          "familyStatesPerSlice": 16, "frontierOverflow": "checkpointed-deferred-alternatives",
+                         "maximumFamilySlice": 128,
                          "maximumRouteCandidatesPerTopology": 512,
                          "scope": "Conservative stock envelopes with declared connector/socket engagement; exact phase gate still mandatory.",
                          "limits": "No changes to export, reconstruction, prefix, repair-depth or full-trial allowances.",

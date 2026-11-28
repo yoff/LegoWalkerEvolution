@@ -44,7 +44,7 @@ See [architecture and design decisions](docs/architecture.md),
 git clone https://github.com/yoff/LegoWalkerEvolution.git
 cd LegoWalkerEvolution
 python3.12 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev,physics]'
+.venv/bin/python -m pip install -e '.[dev,physics,solver]'
 export LDRAW_LIBRARY=/absolute/path/to/ldraw
 dotnet build LegoWalkers.sln
 ```
@@ -52,6 +52,9 @@ dotnet build LegoWalkers.sln
 The simulator revision and MuJoCo version are pinned in
 [pyproject.toml](pyproject.toml). Do not substitute historical simulation results
 for measurements under the current protocol.
+Campaign construction uses Z3 from the solver extra; runtime preparation freezes
+its executable alongside the F# compiler. Standalone F# generation remains usable
+without Z3 unless `--constraint-solver` is requested.
 
 ## Start with the kept population
 

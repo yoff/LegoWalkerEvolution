@@ -457,6 +457,17 @@ def locked(directory):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def construction_solver(generator):
+    directory = Path(generator.command[1]).parent
+    executable = directory / "z3"
+    if not executable.is_file() and directory.parent.name != "protocol-source":
+        executable = Path(sys.executable).with_name("z3")
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        raise AdapterError("Current campaign construction requires Z3; install the solver extra "
+                           "(python -m pip install -e '.[solver]') and prepare the runtime.")
+    return executable.resolve()
+
+
 class Generator:
     def __init__(self, dotnet, dll):
         self.command = [str(dotnet), str(dll)]
@@ -539,7 +550,8 @@ class Generator:
         command = ["build-walker", "--parent", str(parent), "--output", str(output),
                    "--limit", "1", "--steps", str(POLICY["samples"]),
                    "--foot-policy", "paired-plates", "--foot-layers", str(layers),
-                   "--ground-clearance-ldu", str(POLICY["groundClearanceLdu"])]
+                   "--ground-clearance-ldu", str(POLICY["groundClearanceLdu"]),
+                   "--constraint-solver", str(construction_solver(self))]
         if placements is not None:
             command += ["--target-placements", str(placements)]
         if seen_requests:
@@ -657,8 +669,9 @@ def protocol_definition(generator, library, options, profile):
         "sourceSha256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                          for path in sources},
         "generatorBinarySha256": {
-            name: hashlib.sha256(Path(generator.command[1]).with_name(name).read_bytes()).hexdigest()
-            for name in ("LegoWalkers.Cli.dll", "LegoWalkers.Core.dll")
+            **{name: hashlib.sha256(Path(generator.command[1]).with_name(name).read_bytes()).hexdigest()
+               for name in ("LegoWalkers.Cli.dll", "LegoWalkers.Core.dll")},
+            "z3": hashlib.sha256(construction_solver(generator).read_bytes()).hexdigest(),
         },
         "versions": {name: importlib.metadata.version(name) for name in
                      ("mujoco", "numpy", "lego-technic-sim", "legowalkers-sim")},
@@ -691,7 +704,8 @@ def freeze_runtime(archive, protocol, generator):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
     binary = Path(generator.command[1]).parent
-    for path in [*binary.glob("*.dll"), *binary.glob("*.json")]:
+    solvers = [construction_solver(generator)] if "z3" in protocol["generatorBinarySha256"] else []
+    for path in [*binary.glob("*.dll"), *binary.glob("*.json"), *solvers]:
         target = destination / "generator" / path.name
         if not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)

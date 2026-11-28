@@ -50,3 +50,27 @@ type WalkerGenome = {
     [<JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)>]
     LegFamilies: LegFamily list option
 }
+
+type WalkerFootStack = { ContactPart: string; PartIds: string list }
+
+module WalkerFootStack =
+    let tryCreate (parts: PartInstance list) (contact: PartInstance) =
+        let rec mounted layers (plate: PartInstance) =
+            if layers>2 || plate.Part<>"3710.dat" || plate.Body.IsNone
+               || not(Vec3.finite plate.Position && Rotation.valid plate.Rotation) then None else
+            parts |> List.sortBy _.Id |> List.tryPick (fun parent ->
+                if parent.Id=plate.Id || parent.Body<>plate.Body
+                   || Vec3.distance parent.Rotation.X plate.Rotation.X>=1e-6
+                   || Vec3.distance parent.Rotation.Y plate.Rotation.Y>=1e-6
+                   || Vec3.distance parent.Rotation.Z plate.Rotation.Z>=1e-6
+                   || not(Vec3.finite parent.Position && Rotation.valid parent.Rotation) then None else
+                match Catalog.soleUnderside parent.Part with
+                | Some height when Vec3.distance
+                                       (Vec3.add parent.Position (Vec3.scale height parent.Rotation.Y))
+                                       plate.Position<1e-6 ->
+                    if parent.Part="3701.dat" then Some [plate.Id;parent.Id]
+                    elif parent.Part="3710.dat" then
+                        mounted (layers+1) parent |> Option.map (fun ids -> plate.Id::ids)
+                    else None
+                | _ -> None)
+        mounted 1 contact |> Option.map (fun ids -> {ContactPart=contact.Id;PartIds=ids})

@@ -31,6 +31,7 @@
     <Compile Include="WalkerFootPlates.fs" />
     <Compile Include="WalkerConnectionGrammar.fs" />
     <Compile Include="ConstructionSearch.fs" />
+    <Compile Include="ConstructionConstraints.fs" />
     <Compile Include="WalkerPackaging.fs" />
     <Compile Include="WalkerScaffold.fs" />
     <Compile Include="WalkerConstructionTheory.fs" />

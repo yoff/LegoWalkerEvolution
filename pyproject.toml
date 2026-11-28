@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 physics = ["mujoco==3.2.7"]
 dev = ["pytest>=8,<10"]
+solver = ["z3-solver==4.15.4.0"]
 
 [project.scripts]
 legowalkers-sim = "legowalkers_sim.cli:main"

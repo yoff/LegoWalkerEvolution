@@ -233,8 +233,13 @@ def test_generator_rejects_changed_intent_control_or_missing_construction_proof(
     (parent / "program.json").write_text(json.dumps({"program": program}))
     balance_file = tmp_path / "balance-model.json"
     balance_file.write_text('{"totalMassKg": 0.5}')
+    solver = tmp_path / "z3"
+    solver.write_bytes(b"solver fixture")
+    solver.chmod(0o755)
 
     def run(*args, **kwargs):
+        command = args[0]
+        assert command[command.index("--constraint-solver")+1] == str(solver)
         summary = Proposals().build_native(parent, output)
         summary.update(parentGenotypeId=load_manifest(parent / "manifest.json")["motion"]["genotypeId"],
                        counts={"exported": 1, "dynamicTrials": 0},
@@ -258,5 +263,5 @@ def test_generator_rejects_changed_intent_control_or_missing_construction_proof(
 
     monkeypatch.setattr("legowalkers_sim.evolution.subprocess.run", run)
     with pytest.raises(AdapterError, match="reference intent|electrical control|construction proof|balance estimate"):
-        Generator(Path("dotnet"), Path("generator.dll")).build_native(
+        Generator(Path("dotnet"), tmp_path / "generator.dll").build_native(
             parent, output, balance_model=balance_file if change == "balance" else None)

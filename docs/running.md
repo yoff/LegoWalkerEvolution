@@ -109,7 +109,14 @@ dotnet run --project src/LegoWalkers.Cli -- build-walker \
   --foot-policy paired-plates --foot-layers 1 --ground-clearance-ldu 8
 ```
 
-Use `--foot-layers 2` when one plate layer cannot satisfy the nominal clearance.
+`--foot-layers 2` increases clearance beneath the ankle brick. Ground plans
+explicitly record validated foot stacks: a contact plate, at most one upper
+plate, and their aligned 3701 ankle brick on the same output body. The bottom
+plate remains the only contact surface; upper stack parts are checked for ground
+penetration rather than the non-foot margin. All other parts, including nearby
+bricks and ankle pins, retain the requested non-foot margin. This distinction
+allows rocking stock soles whose 8 LDU layer spacing projects to less than
+8 LDU vertically; it is not an exemption for an entire foot body.
 `--target-placements FILE` accepts a JSON map from known component IDs to finite
 `{"x": ..., "y": ..., "z": ...}` placement preferences in LDU; these preferences
 do not bypass routing or change reference motion.
@@ -219,7 +226,9 @@ counts alongside checked/rejected parts and cache hits. Compact rejection events
 record every failure and its bindings without the visualization throttle.
 Only repair-relevant feedback invalidates replay caches; scaffold identity is
 included when caching walking repairs. Within each layout family, search remains
-depth-first. Every sixteen visited states it selects a pending branch by
+depth-first. Family slices grow from 16 to 32, 64 and then 128 visited states,
+allowing healthy partial builds more time to complete. At each slice boundary
+the search selects a pending branch by
 lexicographically least-visited scaffold/walking/hardware/drivetrain/motor-motif
 prefixes, retaining cost order for ties. Slices count main state expansions, not
 seconds; an expensive geometry expansion cannot be preempted by the scheduler.
@@ -230,6 +239,76 @@ consuming the entire state budget or dropping the inherited scaffold.
 Search is still bounded feasibility search, not globally optimal branch-and-bound.
 Exhausting a truncated domain is a failure of this bounded grammar, never a
 proof that no physical construction exists.
+
+An optional incremental Z3 backend checks the discrete choices before geometry
+expansion: install `python -m pip install '.[solver]'` in the project environment,
+then pass `--constraint-solver .venv/bin/z3` to `build-walker`.
+F# still generates every production and performs geometry/connectivity checks.
+The solver records conditional finite domains from enumerated branches, with
+per-goal exclusivity and exact request-scoped conflict clauses. Unsat cores can
+exclude a partial family when all registered alternatives are blocked, even if
+no existing clause directly matches that partial proof. This is bounded-grammar
+inconsistency, not physical impossibility. Repair feedback invalidates registered
+domains because repairs can enlarge the production pool.
+Unknown results are recorded explicitly and do not prune; solver startup,
+protocol and communication failures fail the command rather than falling back.
+`constraint-solver.json` records the backend version and executable hash;
+live search snapshots report checks, solver prunes and inconclusive warnings.
+Standalone CLI builds opt in with that flag. Ordinary campaign construction now
+requires the solver extra and supplies the flag automatically. Runtime preparation
+hashes and freezes the Z3 executable alongside the compiler; workers use that
+frozen copy, and construction receipts include its hash. A missing frozen solver
+is an error, never a fallback to a different installed solver.
+
+With that flag, once hardware, motor mounting and axle stock are fixed, F# also
+exports a joint support problem. It contains the actual bounded beam/pin route
+choices, fully covered scaffold round sockets and their retained connector
+occupancy. Connector overlaps and duplicate produced parts forbid incompatible
+route pairs; a covered scaffold socket can be occupied by only one route.
+The existing rigid-pin bond and path checks also explain locally invalid routes
+before a complete assembly is constructed. This information is checked again
+against occupancy-regenerated alternatives during physical replay.
+Z3 selects one compatible route per support obligation, preferring earlier
+ranked alternatives only when the remaining obligations can still be satisfied.
+Those assignments guide branching without changing immutable production costs.
+Plans and route checks are cached within the exact request context.
+Retained moving non-foot parts are also audited against the existing ground plan
+before hardware support search. A failure is explained by the fixed
+scaffold/walking/drivetrain bindings, not by unrelated payload or support choices.
+Validated foot-stack parents use the explicit nonpenetration rule described
+above; unregistered or unrelated sole geometry retains the non-foot margin.
+The final whole-assembly audit applies the same classification and rejects
+forged or stale ground-plan stack metadata.
+
+`joint-support-problem.json` records socket providers, attachment requirements,
+route conflicts and local rejection gates. `joint-support-plan.json` and the
+event journal record selected assignments or the blocked requirements and their
+socket locations. A blocked initial pool or an unknown result is reported, but
+does not discard a family: later occupancy can regenerate routes outside that
+pool. Such routes remain eligible for normal F# search and validation.
+Scaffold choice remains in the outer search; this step allocates the sockets of
+the selected scaffold rather than inventing new rails or intermediate anchors.
+
+Trudge is also a running **symbolic** example. After building the CLI, run:
+
+```sh
+.tools/dotnet/dotnet fsi \
+  --reference:src/LegoWalkers.Core/bin/Debug/net10.0/LegoWalkers.Core.dll \
+  examples/trudge-constraints.fsx .venv/bin/z3
+```
+
+This small scaffold/axle/motor-support problem defines two blocked routes and
+checks that the solver excludes the scaffold without blaming an irrelevant axle.
+It also verifies that an untested third route remains available and that repaired
+domains replace old constraints. These are illustrative defined conflicts, not
+mined geometry or a reconstruction of the qualified Trudge witness.
+The example additionally derives shared/free sockets from a real stock beam:
+joint planning reserves the shared socket for the obligation that has no
+alternative, and explains why a fixed competing route or retained pin blocks
+that allocation. This is a stock-socket subproblem, not a complete Trudge build.
+Use this cheap check for constraint-layer progress; compare saved Trudge requests
+for states/time to a local build witness, and physical trials separately for
+qualification. No solver result or example spends simulation trials.
 
 When source mass estimation succeeds, joint motor/battery/receiver layouts are
 ranked before support routing by squared horizontal COM offset, normalized by

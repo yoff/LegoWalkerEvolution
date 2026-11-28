@@ -159,9 +159,11 @@ def test_backward_gait_generates_one_normal_control_only_repair_then_is_measured
 def mock_constructor(tmp_path, monkeypatch, base):
     from legowalkers_sim import motion_carry
     binaries = {}
-    for name in ("LegoWalkers.Cli.dll", "LegoWalkers.Core.dll"):
+    for name in ("LegoWalkers.Cli.dll", "LegoWalkers.Core.dll", "z3"):
         path = tmp_path / name
         path.write_bytes(name.encode())
+        if name == "z3":
+            path.chmod(0o755)
         binaries[name] = hashlib.sha256(path.read_bytes()).hexdigest()
     base["generatorBinarySha256"] = binaries
     monkeypatch.setattr(Proposals, "command", ["dotnet", str(tmp_path / "LegoWalkers.Cli.dll")], raising=False)

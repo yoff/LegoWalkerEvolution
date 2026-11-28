@@ -150,16 +150,6 @@ module WalkerRealization =
                 | [j] -> j
                 | _ -> reject "The motor needs one chassis bearing on the input body."
             if (Catalog.get byId[input.Connector].Part).Connector <> Some Axle then reject "The motor input must use an axle."
-            let rec mountedPlate layers (plate: PartInstance) =
-                layers<=2 &&
-                (parts |> List.exists (fun parent ->
-                    parent.Id<>plate.Id && parent.Body=plate.Body
-                    && Vec3.distance parent.Rotation.X plate.Rotation.X<1e-6
-                    && Vec3.distance parent.Rotation.Y plate.Rotation.Y<1e-6
-                    && Vec3.distance parent.Rotation.Z plate.Rotation.Z<1e-6
-                    && (Catalog.soleUnderside parent.Part |> Option.exists (fun height ->
-                        Vec3.distance (Vec3.add parent.Position (Vec3.scale height parent.Rotation.Y)) plate.Position<1e-6))
-                    && (parent.Part="3701.dat" || (parent.Part="3710.dat" && mountedPlate (layers+1) parent))))
             let logicalFeet = ResizeArray<string * string>()
             let feet, paths =
                 [for f in s.Program.Feet do
@@ -191,7 +181,7 @@ module WalkerRealization =
                             if not (near (abs source.Rotation.Z.Z) 1.0) then reject "Sole contact patches require a transverse brick depth axis."
                             let shift =
                                 if source.Part="3710.dat" then
-                                    if not (mountedPlate 1 source) || not(near source.Position.Z contact.Depth) then
+                                    if (WalkerFootStack.tryCreate parts source).IsNone || not(near source.Position.Z contact.Depth) then
                                         reject "Plate soles require one or two stud-aligned 3710 plates underneath a 3701 brick at the declared depth."
                                     let original = Motion.position s.Graph s.Frames.Head port |> Result.defaultWith reject
                                     let bottom = Vec3.add source.Position (Vec3.scale 8.0 source.Rotation.Y)

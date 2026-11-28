@@ -630,6 +630,24 @@ module WalkerPackagingTests =
         Assert.True(proof.Steps |> List.exists (fun s -> not s.Bonds.IsEmpty))
         let chassis = witness.Value.Realized.Assembly.Chassis
         let frame = proof.Steps |> List.find (fun s -> s.Goal="frame") |> _.Parts |> Set.ofList
+        let placements =
+            (witness.Value.Realized.Genome.Bodies |> List.collect _.Parts) @ witness.Value.Realized.Genome.Mounts
+            |> List.map (fun part -> part.Id,part) |> Map.ofList
+        let retained = witness.Value.RetainedFramePartIds |> List.map (fun id -> placements[id])
+        let targets = request.Targets |> List.map (fun target -> placements[target.Placement.Id])
+        let supports = proof.Steps |> List.filter (fun step ->
+            proof.Goals |> List.exists (fun goal -> goal.Id=step.Goal && goal.Kind="mount-and-bearing"))
+        for step in supports do
+            let parts = step.Parts |> List.map (fun id -> placements[id])
+            Assert.True((WalkerConstructionTheory.supportRouteGate step.Goal parts retained targets).IsNone)
+        let selected = supports.Head
+        let parts = selected.Parts |> List.map (fun id -> placements[id])
+        let broken = parts |> List.map (fun part ->
+            if part.Id=selected.Goal+"-anchor-pin" then {part with Position=Vec3.add part.Position (Vec3.create 2000 0 0)}
+            else part)
+        let rejected = WalkerConstructionTheory.supportRouteGate selected.Goal broken retained targets
+        Assert.True(rejected.IsSome)
+        Assert.Equal("unproved-rigid-pin-bond",rejected.Value.Code)
         let newStructural =
             witness.Value.Realized.Genome.Bodies |> List.find (fun b -> b.Body=chassis) |> _.Parts
             |> List.map _.Id |> Set.ofList |> fun parts -> Set.difference parts frame
@@ -667,7 +685,11 @@ module WalkerPackagingTests =
         let longer =
             proof.Steps |> List.indexed |> List.filter (fun (_,s) -> s.Rule="two-beam-covered-pin-bracket")
             |> List.tryPick (fun (index,selected) ->
-                let prefix = {proof with Steps=proof.Steps |> List.take index}
+                let prefix =
+                    proof.Steps |> List.take index
+                    |> List.fold (fun prefix step ->
+                        let introduced = step.Introduced |> List.map (fun id -> proof.Goals |> List.find (fun goal -> goal.Id=id))
+                        ConstructionSearch.apply prefix {Step=step;Introduces=introduced}) initial.Frontier.Head
                 let choices =
                     match expand prefix [] with
                     | Branch(_,choices) -> choices

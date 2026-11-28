@@ -7,7 +7,7 @@ import pytest
 
 from legowalkers_sim import screening, upgrades
 from legowalkers_sim.bridge import AdapterError
-from legowalkers_sim.evolution import Archive
+from legowalkers_sim.evolution import Archive, construction_solver, freeze_runtime
 from legowalkers_sim.native_episode import native_protocol, seed_batches, stage_native
 from legowalkers_sim.pinned import verify_snapshot
 from test_evolution import protocol, result
@@ -40,6 +40,50 @@ def test_snapshot_requires_exact_source_and_compiler_bytes(tmp_path):
         verify_snapshot(tmp_path)
 
 
+def test_campaign_solver_is_frozen_and_missing_snapshot_solver_never_uses_live_environment(tmp_path, monkeypatch):
+    compiler = tmp_path / "live/compiler.dll"
+    solver = compiler.with_name("z3")
+    compiler.parent.mkdir()
+    compiler.write_bytes(b"compiler")
+    solver.write_bytes(b"solver")
+    solver.chmod(0o755)
+    generator = SimpleNamespace(command=["dotnet", str(compiler)])
+    definition = {
+        "sourceSha256": {},
+        "generatorBinarySha256": {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                                 for path in (compiler, solver)},
+    }
+    archive = SimpleNamespace(directory=tmp_path / "archive")
+    freeze_runtime(archive, definition, generator)
+    frozen = archive.directory / "protocol-source/generator/z3"
+    assert construction_solver(generator) == frozen
+    assert frozen.read_bytes() == b"solver"
+    monkeypatch.setattr("legowalkers_sim.evolution.sys.executable", str(compiler.with_name("python")))
+    frozen.unlink()
+    with pytest.raises(AdapterError, match="requires Z3"):
+        construction_solver(generator)
+
+
+def test_solver_changes_invalidate_runtime_and_construction_receipts(tmp_path, monkeypatch):
+    from legowalkers_sim import evolution, motion_carry
+    from legowalkers_sim.evaluation import EvaluationOptions
+    for name in ("LegoWalkers.Cli.dll", "LegoWalkers.Core.dll", "z3"):
+        path = tmp_path / name
+        path.write_bytes(name.encode())
+        if name == "z3":
+            path.chmod(0o755)
+    generator = SimpleNamespace(command=["dotnet", str(tmp_path / "LegoWalkers.Cli.dll")],
+                                invoke=lambda command: json.dumps(motion_carry.POLICY)
+                                if command == "construction-policy" else "3001.dat")
+    monkeypatch.setattr(evolution, "library_fingerprint", lambda *args: "fixture")
+    before = evolution.protocol_definition(generator, tmp_path, EvaluationOptions(), {})
+    receipt = motion_carry._binaries(generator)
+    (tmp_path / "z3").write_bytes(b"changed solver")
+    after = evolution.protocol_definition(generator, tmp_path, EvaluationOptions(), {})
+    assert before["generatorBinarySha256"]["z3"] != after["generatorBinarySha256"]["z3"]
+    assert receipt != motion_carry._binaries(generator)
+
+
 def test_screening_cache_versions_preserve_previous_reports(tmp_path, monkeypatch):
     monkeypatch.setattr(screening, "_protocol", lambda loaded: {"implementation": "v1", "loaded": loaded})
     old = screening.cache_directory(tmp_path)
@@ -55,8 +99,11 @@ def test_screening_cache_versions_preserve_previous_reports(tmp_path, monkeypatc
 def test_joint_tree_changes_invalidate_scientific_and_screening_fingerprints(tmp_path, monkeypatch, filename):
     from legowalkers_sim import evolution
     from legowalkers_sim.evaluation import EvaluationOptions
-    for name in ("LegoWalkers.Cli.dll", "LegoWalkers.Core.dll"):
-        (tmp_path / name).write_bytes(b"fixture")
+    for name in ("LegoWalkers.Cli.dll", "LegoWalkers.Core.dll", "z3"):
+        path = tmp_path / name
+        path.write_bytes(b"fixture")
+        if name == "z3":
+            path.chmod(0o755)
     from legowalkers_sim.motion_carry import POLICY
     generator = SimpleNamespace(command=["dotnet", str(tmp_path / "LegoWalkers.Cli.dll")],
                                 invoke=lambda command: json.dumps(POLICY) if command == "construction-policy" else "3001.dat")

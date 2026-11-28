@@ -33,6 +33,7 @@ let usage = """LegoWalkers: constrained Technic mechanism compiler
                [--max-roll-degrees NUMBER] [--max-pitch-degrees NUMBER]
                [--seen-requests JSON-ARRAY-OF-SCOPED-REQUEST-IDS]
                [--balance-model JSON-FILE]
+               [--constraint-solver Z3-EXECUTABLE]
     Ground options also apply to construct-walker without --feedback.
     Defaults: paired plates, 8 LDU non-foot clearance, upright nominal attitude.
     Writes throttled live proof/envelope snapshots and a recorded search-event stream.
@@ -162,8 +163,19 @@ let buildWalker options =
     let directory = output options
     WalkerBuilder.write directory policy
     File.WriteAllText(Path.Combine(directory,"request.json"),Realization.json request+"\n")
-    let oracleScope = "motion-first-build-awaiting-exact-admission-v1"
+    let solverPath = Map.tryFind "--constraint-solver" options
+    let oracleScope =
+        let admission = "motion-first-build-awaiting-exact-admission-v1"
+        match solverPath with
+        | None -> admission
+        | Some path ->
+            let hash = Convert.ToHexString(Security.Cryptography.SHA256.HashData(File.ReadAllBytes path)).ToLowerInvariant()
+            admission+"/z3-finite-construction-v2/"+hash
     let initial = WalkerConstructionTheory.start request oracleScope 512 64
+    let solver = solverPath |> Option.map (fun path -> new Z3ConstructionSolver(path,initial.Scope))
+    use solverLifetime = solver |> Option.map (fun solver -> solver :> IDisposable) |> Option.toObj
+    solver |> Option.iter (fun solver ->
+        File.WriteAllText(Path.Combine(directory,"constraint-solver.json"),Realization.json solver.Description+"\n"))
     let requestId = initial.Scope
     let seenRequests =
         match Map.tryFind "--seen-requests" options with
@@ -178,6 +190,9 @@ let buildWalker options =
     let mutable observedProof = initial.Frontier.Head
     let mutable inspection: WalkerConstructionInspection option = None
     let mutable detail = "Opening the construction proof."
+    let mutable jointCalls,jointModels,jointBlocked,jointInconclusive = 0,0,0,0
+    let mutable lastJointProblem = ""
+    let mutable jointRejectedRoutes = 0
     let appendEvent (text: string) =
         File.AppendAllText(Path.Combine(directory,"construction-events.jsonl"),text.Replace("\n","").Replace("\r","")+"\n")
     let writeSnapshot force =
@@ -190,6 +205,10 @@ let buildWalker options =
                 search={|visited=observedState.Visited;maximumStates=observedState.MaximumStates
                          frontier=observedState.Frontier.Length;pruned=observedState.Pruned;discarded=observedState.Discarded
                          deferred=observedState.Deferred.Length
+                         constraintChecks=observedState.ConstraintChecks;constraintPruned=observedState.ConstraintPruned
+                         constraintWarnings=observedState.ConstraintWarnings
+                         jointCalls=jointCalls;jointModels=jointModels;jointBlocked=jointBlocked
+                         jointInconclusive=jointInconclusive;jointRejectedRoutes=jointRejectedRoutes
                          learnedConflicts=observedState.Nogoods.Length|}
                 authority="Live partial construction and sampled stock envelopes; not a qualified assembly or physics."
                 dynamicTrials=0
@@ -217,6 +236,7 @@ let buildWalker options =
                 |> Option.map (fun goal -> $"Expanding {goal.Id} ({goal.Kind}).")
                 |> Option.defaultValue "Verifying the locally constructed witness."
             | Some(Branch(goal,choices)) -> $"{goal}: {choices.Length} applicable productions."
+            | Some(GuidedBranch(goal,choices,_)) -> $"{goal}: {choices.Length} productions; prioritizing the joint support plan."
             | Some(Blocked gate) -> gate.Code+": "+String.concat "; " gate.Diagnostics
             | Some(BlockedBy(gate,_)) -> gate.Code+": "+String.concat "; " gate.Diagnostics
             | Some(Built _) -> "Local construction witness found; external admission is still required."
@@ -245,7 +265,35 @@ let buildWalker options =
                 {Gate="construction-search";Outcome="reject";Code="duplicate-effective-request"
                  Diagnostics=["This effective request was already searched in the current build obligation; no repeated search was run."]}
             {initial with Status="duplicate-request";Rejections=[gate]},None
-        else WalkerConstructionTheory.advanceObserved observe inspect request oracleScope initial
+        else
+            let check = solver |> Option.map (fun solver -> fun state proof -> solver.Check(state,proof))
+            let planner = solver |> Option.map (fun solver ->
+                {Solve=fun proof nogoods problem ->
+                     jointCalls <- jointCalls+1
+                     solver.Plan(proof,nogoods,problem)
+                 Report=fun problem result ->
+                     let status,assignments,goals,bindings,reason =
+                         match result with
+                         | JointPlanned assignments -> jointModels<-jointModels+1;"planned",assignments,[],[],None
+                         | JointBlocked(goals,bindings) -> jointBlocked<-jointBlocked+1;"bounded-pool-blocked",[],goals,bindings,None
+                         | JointInconclusive reason -> jointInconclusive<-jointInconclusive+1;"inconclusive",[],[],[],Some reason
+                     if lastJointProblem<>problem.Id then
+                         File.WriteAllText(Path.Combine(directory,"joint-support-problem.json"),Realization.json problem+"\n")
+                         lastJointProblem <- problem.Id
+                     jointRejectedRoutes <- problem.Rejections.Length
+                     let report = {|
+                         eventType="joint-support-plan";problemId=problem.Id;scope=problem.Scope
+                         elapsedSeconds=timer.Elapsed.TotalSeconds;status=status;assignments=assignments
+                         blockedRequirements=problem.Requirements |> List.filter (fun requirement -> List.contains requirement.Goal goals)
+                         bindings=bindings;reason=reason;rejectedRoutes=problem.Rejections.Length
+                         requirements=problem.Requirements.Length;connectorConflicts=problem.Conflicts.Length
+                         authority="Bounded scaffold-socket plan; normal F# replay and external admission remain mandatory."
+                         dynamicTrials=0
+                     |}
+                     File.WriteAllText(Path.Combine(directory,"joint-support-plan.json"),Realization.json report+"\n")
+                     appendEvent (Realization.json report)})
+            let expansion = WalkerConstructionTheory.expansionPlannedObserved planner (Some inspect) request oracleScope
+            ConstructionSearch.nextObservedWithConstraints check observe expansion initial
     observedState <- state
     state.Pending |> Option.iter (fun proof -> observedProof<-proof)
     detail <- if duplicate then "Duplicate effective request skipped." else $"Search stopped: {state.Status}."
@@ -281,6 +329,10 @@ let buildWalker options =
         motionFirst={|version=WalkerMotionSpace.version;theoryVersion=WalkerConstructionTheory.version
                       packagingVersion=WalkerPackaging.version;maximumStates=512;maximumFrontier=64
                       familyStatesPerSlice=WalkerConstructionTheory.familyStatesPerSlice
+                      maximumFamilySlice=WalkerConstructionTheory.familyStatesPerSlice*8
+                      constraintSolver=solver |> Option.map _.Description
+                      jointSupportPlanning={|calls=jointCalls;models=jointModels;blocked=jointBlocked
+                                             inconclusive=jointInconclusive;lastRejectedRoutes=jointRejectedRoutes|}
                       maximumTargetAssignments=32;visitedStates=state.Visited;status=state.Status;requestId=requestId
                       qualification="Pending exact reconstruction, complete-assembly phase clearance and separately authorized dynamics."|}
     |}
@@ -559,7 +611,7 @@ let main argv =
             0
         | command :: args when command="build-walker" || (command="construct-walker" && not(List.contains "--feedback" args)) ->
             let options = parseOptions (Set.ofList ["--parent";"--output";"--builder-policy";"--limit";"--steps";
-                                                   "--foot-policy";"--foot-layers";"--target-placements";"--seen-requests";"--balance-model";"--ground-clearance-ldu";"--max-roll-degrees";"--max-pitch-degrees"]) args
+                                                   "--foot-policy";"--foot-layers";"--target-placements";"--seen-requests";"--balance-model";"--ground-clearance-ldu";"--max-roll-degrees";"--max-pitch-degrees";"--constraint-solver"]) args
             buildWalker options
         | "construct-walker" :: args ->
             let options = parseOptions (Set.ofList ["--parent"; "--output"; "--feedback"; "--conflicts"; "--builder-policy"; "--limit"; "--steps"]) args
@@ -875,4 +927,6 @@ let main argv =
     | :? IOException as e -> eprintfn "ERROR: %s" e.Message; 2
     | :? UnauthorizedAccessException as e -> eprintfn "ERROR: %s" e.Message; 2
     | :? InvalidOperationException as e -> eprintfn "ERROR: %s" e.Message; 2
+    | :? TimeoutException as e -> eprintfn "ERROR: Constraint solver communication timed out: %s" e.Message; 2
+    | :? ComponentModel.Win32Exception as e -> eprintfn "ERROR: Could not start constraint solver: %s" e.Message; 2
     | :? JsonException as e -> eprintfn "ERROR: %s" e.Message; 2

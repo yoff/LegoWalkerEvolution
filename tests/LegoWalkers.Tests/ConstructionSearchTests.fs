@@ -168,7 +168,7 @@ module ConstructionSearchTests =
         let resumed,built = ConstructionSearch.next expand {checkpoint with MaximumStates=64}
         Assert.True(built.IsSome)
         Assert.Equal<string list>(["a";"b";"c"],layouts)
-        Assert.InRange(resumed.Visited,1,12)
+        Assert.InRange(resumed.Visited,1,20)
         Assert.NotEmpty(resumed.Deferred)
 
     [<Fact>]
@@ -186,6 +186,57 @@ module ConstructionSearchTests =
         Assert.Equal("19",witness.Value.Steps.Head.Choice)
         Assert.Equal(21,state.Visited)
         Assert.Equal(0,state.Discarded)
+
+    [<Fact>]
+    let ``inconclusive constraint checks remain explicit and do not reject a viable proof`` () =
+        let initial = seed [goal "frame" [] false;goal "oracle" [] true]
+        let check _ _ = Inconclusive "symbolic-check-budget-exhausted"
+        let expand (proof: ConstructionProof) _ =
+            if proof.Steps.IsEmpty then Branch("frame",[choice "frame" "same" [] [] [] []])
+            else Built("witness",proof)
+        let state,witness = ConstructionSearch.nextObservedWithConstraints (Some check) (fun _ _ _ -> ()) expand initial
+        Assert.True(witness.IsSome)
+        Assert.Equal(0,state.ConstraintPruned)
+        Assert.Equal<string list>(["symbolic-check-budget-exhausted"],state.ConstraintWarnings)
+        Assert.Equal(2,state.ConstraintChecks)
+        Assert.Equal("frame",state.Domains.Head.Goal)
+
+    [<Fact>]
+    let ``constraint explanations prune before expansion and must match proof assumptions`` () =
+        let initial = seed [goal "frame" [] false;goal "oracle" [] true]
+        let mutable expanded = []
+        let expand (proof: ConstructionProof) _ =
+            if proof.Steps.IsEmpty then
+                Branch("frame",["blocked";"clear"] |> List.map (fun value -> choice "frame" value [] [] [] []))
+            else
+                expanded <- expanded @ [proof.Steps.Head.Choice]
+                Built("witness",proof)
+        let check _ (proof: ConstructionProof) =
+            if proof.Steps |> List.exists (fun step -> step.Choice="blocked") then Inconsistent ["frame","blocked"]
+            else Consistent
+        let state,witness = ConstructionSearch.nextObservedWithConstraints (Some check) (fun _ _ _ -> ()) expand initial
+        Assert.True(witness.IsSome)
+        Assert.Equal<string list>(["clear"],expanded)
+        Assert.Equal(1,state.ConstraintPruned)
+        let invalidCheck _ _ = Inconsistent ["frame","not-an-assumption"]
+        Assert.Throws<ArgumentException>(fun () ->
+            ConstructionSearch.nextObservedWithConstraints (Some invalidCheck) (fun _ _ _ -> ()) expand initial |> ignore) |> ignore
+
+    [<Fact>]
+    let ``joint guidance selects a preferred branch without changing immutable production cost`` () =
+        let initial = seed [goal "frame" [] false;goal "oracle" [] true]
+        let cheap = choice "frame" "cheap" [] [] [] []
+        let planned = {choice "frame" "planned" [] [] [] [] with
+                           Step={ (choice "frame" "planned" [] [] [] []).Step with Cost=10.0}}
+        let expand (proof: ConstructionProof) _ =
+            if proof.Steps.IsEmpty then GuidedBranch("frame",[cheap;planned],"planned")
+            elif proof.Steps.Head=planned.Step then Built("planned",proof)
+            else Blocked {Gate="support";Outcome="reject";Code="unplanned";Diagnostics=[]}
+        let state,witness = ConstructionSearch.next expand initial
+        Assert.True(witness.IsSome)
+        Assert.Equal(2,state.Visited)
+        Assert.Equal(planned.Step,witness.Value.Steps.Head)
+        Assert.Equal<string list>(["cheap";"planned"],state.Domains.Head.Choices)
 
     [<Fact>]
     let ``local causal conflict skips unrelated siblings and survives checkpoint continuation`` () =

@@ -246,6 +246,77 @@ let ``whole assembly ground audit rejects low nonfoot parts without foot linked 
     let invalidRequirements = {plan with Requirements={plan.Requirements with MinimumNonFootClearanceLdu=Double.NaN}}
     Assert.Throws<ArgumentException>(fun () -> WalkerMotionSpace.auditGround invalidRequirements s candidate |> ignore) |> ignore
 
+[<Fact>]
+let ``retained inactive soles are rejected before hardware planning by the same ground audit`` () =
+    let s,g,_,plan,_ = groundFixture ()
+    let contact = WalkerFootChoice.contacts g.Feet.Head |> List.head
+    let body = g.Bodies |> List.find (fun body -> body.Parts |> List.exists (fun part -> part.Id=contact.Part))
+    let sole = body.Parts |> List.find (fun part -> part.Id=contact.Part)
+    let stale = {sole with Id="inactive-retained-sole"}
+    let bodies = g.Bodies |> List.map (fun current ->
+        if current.Body=body.Body then {current with Parts=current.Parts @ [stale]} else current)
+    let candidate = {g with Bodies=bodies}
+    let space = WalkerMotionSpace.reserveWithGround (Some plan.Requirements) s candidate |> unwrap
+    let early = WalkerMotionSpace.retainedGroundConflicts space (Set.singleton stale.Id)
+    let late = WalkerMotionSpace.auditGround plan s candidate |> List.filter (fun conflict -> conflict.Part=stale.Id)
+    Assert.NotEmpty(early)
+    Assert.Equal<WalkerMotionSpace.Conflict list>(late,early)
+
+[<Theory>]
+[<InlineData(1)>]
+[<InlineData(2)>]
+let ``validated foot stacks allow submargin clearance without relaxing unrelated foot body parts`` layers =
+    let s,source,_,_,_ = groundFixture ()
+    let g,_ = WalkerFootPlates.prepareWithLayers layers s source |> unwrap
+    let plan = WalkerMotionSpace.groundPlan WalkerMotionSpace.defaultGroundClearance s g
+    let members = plan.FootStacks |> List.collect _.PartIds |> Set.ofList
+    let failures = WalkerMotionSpace.auditGround plan s g
+    Assert.DoesNotContain(failures,fun failure -> members.Contains failure.Part)
+    let parentId = plan.FootStacks.Head.PartIds[1]
+    let body = g.Bodies |> List.find (fun body -> body.Parts |> List.exists (fun part -> part.Id=parentId))
+    let parent = body.Parts |> List.find (fun part -> part.Id=parentId)
+    let unrelated = {parent with Id="unrelated-foot-body-part"
+                                 Position=Vec3.add parent.Position (Vec3.scale 0.1 parent.Rotation.Y)}
+    let bodies = g.Bodies |> List.map (fun current ->
+        if current.Body=body.Body then {current with Parts=current.Parts @ [unrelated]} else current)
+    let candidate = {g with Bodies=bodies}
+    let space = WalkerMotionSpace.reserveWithGround (Some plan.Requirements) s candidate |> unwrap
+    let early = WalkerMotionSpace.retainedGroundConflicts space (Set.add unrelated.Id members)
+    let late = WalkerMotionSpace.auditGround plan s candidate |> List.filter (fun failure ->
+        failure.Part=unrelated.Id || members.Contains failure.Part)
+    Assert.Contains(early,fun failure -> failure.Part=unrelated.Id)
+    Assert.DoesNotContain(early,fun failure -> members.Contains failure.Part)
+    Assert.Equal<WalkerMotionSpace.Conflict list>(late,early)
+    let stacks = plan.FootStacks |> List.map (fun stack -> {stack with PartIds=unrelated.Id::stack.PartIds})
+    let forged = {plan with FootStacks=stacks}
+    Assert.Throws<ArgumentException>(fun () -> WalkerMotionSpace.auditGround forged s candidate |> ignore) |> ignore
+
+[<Fact>]
+let ``validated foot stack parents still reject ground penetration under prescribed attitude`` () =
+    let s,g,_,_,_ = groundFixture ()
+    let requirements = {WalkerMotionSpace.defaultGroundClearance with MaximumRollRadians=Math.PI/3.0}
+    let plan = WalkerMotionSpace.groundPlan requirements s g
+    let contacts = g.Feet |> List.collect WalkerFootChoice.contacts |> List.map _.Part |> Set.ofList
+    let parents = plan.FootStacks |> List.collect _.PartIds |> List.filter (contacts.Contains >> not) |> Set.ofList
+    let failures = WalkerMotionSpace.auditGround plan s g
+    Assert.Contains(failures,fun failure -> parents.Contains failure.Part)
+    let space = WalkerMotionSpace.reserveWithGround (Some requirements) s g |> unwrap
+    let early = WalkerMotionSpace.retainedGroundConflicts space parents
+    Assert.NotEmpty early
+    Assert.Equal<WalkerMotionSpace.Conflict list>(failures |> List.filter (fun failure -> parents.Contains failure.Part),early)
+
+[<Fact>]
+let ``misaligned contact plates cannot claim validated foot stack ground treatment`` () =
+    let s,g,_,plan,_ = groundFixture ()
+    let contact = g.Feet.Head.Part
+    let bodies = g.Bodies |> List.map (fun body ->
+        let parts = body.Parts |> List.map (fun part ->
+            if part.Id=contact then {part with Position={part.Position with X=part.Position.X+0.5}} else part)
+        {body with Parts=parts})
+    let candidate = {g with Bodies=bodies}
+    Assert.Throws<ArgumentException>(fun () -> WalkerMotionSpace.groundPlan plan.Requirements s candidate |> ignore) |> ignore
+    Assert.True((WalkerRealization.compile s candidate).IsError)
+
 [<Theory>]
 [<InlineData(-1.0)>]
 [<InlineData(Double.NaN)>]

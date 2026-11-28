@@ -12,12 +12,14 @@ from .mass_layout import mass_layout_gate
 from .payload import load_profile
 
 POLICY = {
-    "version": "motion-first-carry-forward-v5",
+    "version": "motion-first-carry-forward-v6",
     "samples": 96, "groundClearanceLdu": 8,
-    "packagingVersion": "packaging-realization-v27",
-    "theoryVersion": "walker-construction-theory-v31",
+    "packagingVersion": "packaging-realization-v29",
+    "theoryVersion": "walker-construction-theory-v34",
+    "constraintSolver": "z3-finite-construction-v2; required and frozen with the campaign compiler",
+    "footClearance": "Validated one/two-plate stacks on aligned 3701 ankle bricks use nonpenetration checks; all other non-contact parts retain the requested margin.",
     "scaffold": "Bounded backbone relocations with stock routes to retained walking interfaces; original frame remains an alternative. Exact whole-chassis connectivity remains mandatory.",
-    "search": "Slice depth-first family search every 16 states, prioritize least-visited layout prefixes and checkpoint deferred alternatives. Propagate connector compatibility and resolve covered finite axle domains using exact scoped conflicts; truncated routes do not prove physical impossibility.",
+    "search": "Use growing 16..128-state depth-first slices, prioritize least-visited layout prefixes and checkpoint deferred alternatives. Propagate connector compatibility and resolve covered finite axle domains using exact scoped conflicts; truncated routes do not prove physical impossibility.",
     "maximumBuildAttempts": 4, "plateLayers": [1, 2],
     "preserves": "Reference walking motion and electrical control; old physical stock is realization advice.",
     "placement": "Try estimated CoM centering at fixed leg mounts, then inherited placement preferences; all new routes remain mandatory.",
@@ -36,8 +38,10 @@ def _hash(path):
 
 
 def _binaries(generator):
-    return {name: _hash(Path(generator.command[1]).with_name(name))
-            for name in ("LegoWalkers.Cli.dll", "LegoWalkers.Core.dll")}
+    from .evolution import construction_solver
+    return {**{name: _hash(Path(generator.command[1]).with_name(name))
+               for name in ("LegoWalkers.Cli.dll", "LegoWalkers.Core.dll")},
+            "z3": _hash(construction_solver(generator))}
 
 
 def _centering(parent, library, profile):
@@ -267,7 +271,7 @@ def _receipt(archive, pending, generator=None):
     receipt = json.loads(path.read_text())
     recorded = archive.protocol().get("generatorBinarySha256", {})
     expected = (_binaries(generator) if generator is not None else
-                {name: recorded.get(name) for name in ("LegoWalkers.Cli.dll", "LegoWalkers.Core.dll")})
+                {name: recorded.get(name) for name in ("LegoWalkers.Cli.dll", "LegoWalkers.Core.dll", "z3")})
     if (receipt.get("policy") != POLICY or receipt.get("builderBinaries") != expected
             or receipt.get("dynamicTrials") != 0
             or receipt.get("generated") != summary["generated"]

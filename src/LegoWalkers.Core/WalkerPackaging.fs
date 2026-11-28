@@ -71,8 +71,23 @@ type WalkerConstructionInspection = {
     CacheHits: int
 }
 
+type WalkerSupportDomain = {
+    Goal: string
+    Socket: Vec3
+    Plane: float
+    Bodies: string list
+    Alternatives: WalkerPlacement list list
+}
+
+type WalkerSupportPlanning = {
+    Scope: string
+    Cache: Dictionary<string,ConstructionJointProblem>
+    CheckRoute: string -> WalkerPlacement list -> GateDecision option
+    Select: ConstructionJointProblem -> ConstructionJointPlan
+}
+
 module WalkerPackaging =
-    let version = "packaging-realization-v27"
+    let version = "packaging-realization-v29"
     let maximumAttempts = 2
     let maximumAnchorChoices = 64
     let private zAxis = Vec3.create 0 0 1
@@ -120,6 +135,48 @@ module WalkerPackaging =
         Catalog.mountPorts part.Part |> List.map (fun port ->
             port,Vec3.add part.Position (Rotation.apply part.Rotation port.Position),
             Rotation.apply part.Rotation port.Axis)
+
+    let supportProblem scope (frame: WalkerPlacement list) (occupied: WalkerPlacement list) (domains: WalkerSupportDomain list) =
+        let covers point axis half (pin: WalkerPlacement) =
+            let delta = Vec3.subtract point pin.Position
+            let along = Vec3.dot delta pin.Rotation.X
+            let low,high = Catalog.shaftRange pin.Part
+            abs(Vec3.dot axis pin.Rotation.X)>1.0-1e-6
+            && Vec3.length(Vec3.cross delta pin.Rotation.X)<1e-6
+            && along-half>=low-1e-6 && along+half<=high+1e-6
+        let sockets = [
+            for part in frame do
+                for index,(port,point,axis) in ports part |> List.indexed do
+                    if port.Kind=RoundHole then
+                        let half = Catalog.socketHalfThickness part.Part
+                        let used = occupied |> List.filter (fun pin ->
+                            (Catalog.get pin.Part).Connector.IsSome && covers point axis half pin) |> List.map _.Id
+                        yield {Id = $"{part.Id}:socket:{index}";Part=part.Id;Position=point;Axis=axis;OccupiedBy=used},half
+        ]
+        let alternatives =
+            domains |> List.map (fun domain ->
+                domain,domain.Alternatives |> List.distinct |> List.map (fun parts ->
+                    let pins = parts |> List.filter (fun part -> (Catalog.get part.Part).Connector.IsSome)
+                    let resources = sockets |> List.choose (fun (socket,half) ->
+                        if pins |> List.exists (covers socket.Position socket.Axis half) then Some socket.Id else None)
+                    {Key=Export.sha256(Realization.json parts);Parts=parts |> List.map _.Id;Sockets=resources},pins))
+        let requirements = alternatives |> List.map (fun (domain,choices) ->
+            {Goal=domain.Goal;Socket=domain.Socket;Plane=domain.Plane;Bodies=domain.Bodies;Choices=choices |> List.map fst})
+        let conflicts = [
+            for index,(left,leftChoices) in List.indexed alternatives do
+                for right,rightChoices in alternatives |> List.skip (index+1) do
+                    for a,pinsA in leftChoices do
+                        for b,pinsB in rightChoices do
+                            let duplicate = a.Parts |> List.exists (fun id -> List.contains id b.Parts)
+                            let overlap = pinsA |> List.exists (fun pin ->
+                                pinsB |> List.exists (fun other ->
+                                    Catalog.shaftsOverlap pin.Part pin.Position pin.Rotation other.Part other.Position other.Rotation))
+                            if duplicate || overlap then
+                                yield {Left=left.Goal,a.Key;Right=right.Goal,b.Key
+                                       Reason=if duplicate then "duplicate-produced-part" else "connector-shaft-overlap"}
+        ]
+        {Id=Export.sha256(Realization.json(scope,frame,occupied,domains));Scope=scope
+         Sockets=sockets |> List.map fst;Requirements=requirements;Conflicts=conflicts;Rejections=[]}
 
     let private beam id part length (a: Vec3) (b: Vec3) plane =
         let a,b = {a with Z=plane},{b with Z=plane}
@@ -442,7 +499,8 @@ module WalkerPackaging =
                       (spaceCache: Dictionary<string,Result<WalkerMotionSpace.Space,GateDecision>> option)
                       (fitCache: Dictionary<string * string * WalkerPlacement,bool> option)
                       (choose: (string -> string -> string list -> WalkerPlacement list list -> int option) option)
-                      (inspect: ((unit -> WalkerConstructionInspection) -> unit) option) =
+                      (inspect: ((unit -> WalkerConstructionInspection) -> unit) option)
+                      (planning: WalkerSupportPlanning option) =
         let mutable pending = None
         let mutable activeGoal,activeRule = "hardware","reserve-gait-and-place-hardware"
         let mutable checkedParts,rejectedParts,cacheHits = 0,0,0
@@ -506,6 +564,19 @@ module WalkerPackaging =
                             | Ok space -> Some space
                             | Error gate -> failure<-Some gate;None
                         let baseReservation = reservation
+                        if planning.IsSome && failure.IsNone then
+                            let feet = request.Source.Feet |> List.collect WalkerFootChoice.contacts |> List.map _.Part |> Set.ofList
+                            let retained =
+                                request.Source.Bodies |> List.filter (fun body -> body.Body<>ground)
+                                |> List.collect _.Parts |> List.filter (fun part ->
+                                    not(remove.Contains part.Id) && not(feet.Contains part.Id) && (Catalog.gearTeeth part.Part).IsNone)
+                                |> List.map _.Id |> Set.ofList
+                            let hits = reservation |> Option.map (fun space -> WalkerMotionSpace.retainedGroundConflicts space retained)
+                                                   |> Option.defaultValue []
+                            if not hits.IsEmpty then
+                                failure <- Some(error "retained-nonfoot-ground-clearance"
+                                    (hits |> List.truncate 16 |> List.map (fun hit ->
+                                        $"{hit.Part} / {hit.Obstacle} at input {hit.InputAngleRadians:G8} rad")))
                         let hardware = request.Targets |> List.map _.Placement
                         let conflicts owner parts =
                             WalkerMotionSpace.fixedConflicts parts hardware
@@ -635,6 +706,27 @@ module WalkerPackaging =
                                     let routes = choices ()
                                     cache.Add(cacheKey,routes)
                                     routes
+                        let supportAlternatives (routes: (WalkerPlacement list * WalkerPlacement list) list)
+                                                (extras: WalkerPlacement list) (mounts: WalkerPlacement list) (used: WalkerPlacement list) =
+                            let basic = routes |> List.map (fun (parts,pins) -> parts @ extras @ pins @ mounts)
+                            let longer =
+                                basic |> List.collect (fun parts ->
+                                    let short = parts |> List.filter (fun p -> p.Part="4459.dat") |> List.map _.Id
+                                    (short |> List.map List.singleton) @ (if short.Length>1 then [short] else [])
+                                    |> List.map (fun ids -> parts |> List.map (fun p ->
+                                        if List.contains p.Id ids then {p with Part="6558.dat"} else p)))
+                                |> List.filter (fun parts ->
+                                    let pins = parts |> List.filter (fun p -> (Catalog.get p.Part).Connector.IsSome)
+                                    pins |> List.forall (fun pin ->
+                                        used @ pins |> List.forall (fun other ->
+                                            pin.Id=other.Id || not(Catalog.shaftsOverlap pin.Part pin.Position pin.Rotation
+                                                                 other.Part other.Position other.Rotation))))
+                            basic @ (longer |> List.distinct |> List.truncate 8)
+                        let rankSupport bodies structural alternatives =
+                            alternatives |> List.filter (fits ground) |> List.sortBy (fun parts ->
+                                let beams = parts |> List.filter (fun p -> (Catalog.get p.Part).Connector.IsNone)
+                                let pins = parts |> List.filter (fun p -> (Catalog.get p.Part).Connector.IsSome)
+                                pins |> List.sumBy (fun p -> contactCapacityDeficit p (structural @ beams) 0),risk bodies parts)
                         let addSupport prefix socket plane extras mounts bodies =
                             if failure.IsNone && pending.IsNone then
                                 activeGoal <- prefix
@@ -656,25 +748,10 @@ module WalkerPackaging =
                                 match routes with
                                 | Error gate -> failure<-Some gate
                                 | Ok routes ->
-                                    let basic = routes |> List.map (fun (parts,pins) -> parts @ extras @ pins @ mounts)
                                     let alternatives =
                                         match choose with
-                                        | None -> basic
-                                        | Some _ ->
-                                            let longer =
-                                                basic |> List.collect (fun parts ->
-                                                    let short = parts |> List.filter (fun p -> p.Part="4459.dat") |> List.map _.Id
-                                                    (short |> List.map List.singleton) @ (if short.Length>1 then [short] else [])
-                                                    |> List.map (fun ids -> parts |> List.map (fun p ->
-                                                        if List.contains p.Id ids then {p with Part="6558.dat"} else p)))
-                                                |> List.filter (fun parts ->
-                                                    let pins = parts |> List.filter (fun p -> (Catalog.get p.Part).Connector.IsSome)
-                                                    pins |> List.forall (fun pin ->
-                                                        occupied @ List.ofSeq addedPins @ pins |> List.forall (fun other ->
-                                                            pin.Id=other.Id ||
-                                                            not(Catalog.shaftsOverlap pin.Part pin.Position pin.Rotation
-                                                                 other.Part other.Position other.Rotation))))
-                                            basic @ (longer |> List.distinct |> List.truncate 8)
+                                        | None -> routes |> List.map (fun (parts,pins) -> parts @ extras @ pins @ mounts)
+                                        | Some _ -> supportAlternatives routes extras mounts (occupied @ List.ofSeq addedPins)
                                     let blocked = ResizeArray<string>()
                                     let alternatives = alternatives |> List.filter (fun parts ->
                                         let hits = [
@@ -687,12 +764,11 @@ module WalkerPackaging =
                                         blocked.AddRange hits
                                         hits.IsEmpty)
                                     let structural = frameParts @ (request.Targets |> List.map _.Placement) @ List.ofSeq addedParts
+                                    let alternatives = rankSupport bodies structural alternatives
                                     let alternatives =
-                                        alternatives |> List.filter (fits ground) |> List.sortBy (fun parts ->
-                                            let beams = parts |> List.filter (fun p -> (Catalog.get p.Part).Connector.IsNone)
-                                            let pins = parts |> List.filter (fun p -> (Catalog.get p.Part).Connector.IsSome)
-                                            pins |> List.sumBy (fun p -> contactCapacityDeficit p (structural @ beams) 0),
-                                            risk bodies parts)
+                                        match planning with
+                                        | None -> alternatives
+                                        | Some plan -> alternatives |> List.filter (fun parts -> plan.CheckRoute prefix parts |> Option.isNone)
                                     let alternatives =
                                         if choose.IsNone then alternatives
                                         else
@@ -834,6 +910,26 @@ module WalkerPackaging =
                                     ranked |> Seq.sortBy (fun (size,index,_) -> size,index)
                                            |> Seq.map (fun (_,_,domain) -> domain) |> Seq.toList
                             pendingSupports <- ordered
+                            if failure.IsNone then
+                                planning |> Option.iter (fun plan ->
+                                    let key = Export.sha256(Realization.json(fitContext,motorMounts,ordered))
+                                    let problem =
+                                        match plan.Cache.TryGetValue key with
+                                        | true,problem -> problem
+                                        | _ ->
+                                            let domains = ordered |> List.map (fun (prefix,socket,plane,extras,mounts,bodies) ->
+                                                let alternatives = supportAlternatives supportWitnesses[prefix] extras mounts occupied
+                                                                   |> rankSupport bodies (frameParts @ hardware)
+                                                {Goal=prefix;Socket=socket;Plane=plane;Bodies=bodies;Alternatives=alternatives})
+                                            let problem = supportProblem plan.Scope frameParts occupied domains
+                                            let rejected = domains |> List.collect (fun domain ->
+                                                domain.Alternatives |> List.distinct |> List.choose (fun parts ->
+                                                    plan.CheckRoute domain.Goal parts |> Option.map (fun gate ->
+                                                        domain.Goal,Export.sha256(Realization.json parts),gate)))
+                                            let problem = {problem with Id=Export.sha256(Realization.json(problem.Id,rejected));Rejections=rejected}
+                                            plan.Cache.Add(key,problem)
+                                            problem
+                                    plan.Select problem |> ignore)
                             for prefix,socket,plane,extras,mounts,bodies in ordered do
                                 pendingSupports <- pendingSupports.Tail
                                 addSupport prefix socket plane extras mounts bodies
@@ -880,12 +976,15 @@ module WalkerPackaging =
                                         Clearance=clearance})
 
     let internal replayObserved inspect request cachedMotion routeCache spaceCache fitCache choose =
-        build 1 request (Some cachedMotion) (Some routeCache) (Some spaceCache) (Some fitCache) (Some choose) inspect
+        build 1 request (Some cachedMotion) (Some routeCache) (Some spaceCache) (Some fitCache) (Some choose) inspect None
+
+    let internal replayPlannedObserved planning inspect request cachedMotion routeCache spaceCache fitCache choose =
+        build 1 request (Some cachedMotion) (Some routeCache) (Some spaceCache) (Some fitCache) (Some choose) inspect (Some planning)
 
     let internal replay request cachedMotion routeCache spaceCache fitCache choose =
         replayObserved None request cachedMotion routeCache spaceCache fitCache choose
 
-    let private construct orientation request = build orientation request None None None None None None
+    let private construct orientation request = build orientation request None None None None None None None
 
     let realize request limit =
         if limit<1 || limit>maximumAttempts then invalidArg "limit" "Packaging realization permits one or two support orientations."

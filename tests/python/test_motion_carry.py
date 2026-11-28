@@ -9,7 +9,7 @@ import pytest
 
 from legowalkers_sim import motion_carry, native_episode
 from legowalkers_sim.bridge import AdapterError, SIMULATOR_REVISION, load_manifest, write_json
-from legowalkers_sim.evolution import Archive, Generator
+from legowalkers_sim.evolution import Archive, Generator, ROOT
 from test_native_discovery import Proposals, setup_discovery
 from test_native_episode import native_fixture
 from test_native_discovery import mock_constructor
@@ -19,6 +19,46 @@ from test_evolution import protocol
 def pending(archive):
     return archive.db.execute(
         "SELECT c.*,b.design FROM native_candidates c JOIN births b ON b.id=c.birth WHERE c.birth=1").fetchone()
+
+
+@pytest.mark.integration
+def test_actual_rerooted_construction_batch_binds_exported_mechanism_identity(tmp_path):
+    generator = Generator(ROOT / ".tools/dotnet/dotnet",
+                          ROOT / "src/LegoWalkers.Cli/bin/Debug/net10.0/LegoWalkers.Cli.dll")
+    if not all(Path(path).is_file() for path in generator.command) or not (ROOT / ".venv/bin/z3").is_file():
+        pytest.skip("Build the F# CLI and install Z3 for motion-first construction integration.")
+    founder = tmp_path / "founder"
+    generator.invoke("realize-walker", "--feet", 4, "--steps", 72, "--output", founder)
+    parent = founder / "candidate-001"
+    extension = next(edit for edit in generator.manual_edits(parent)["edits"]
+                     if edit["operation"] == "shared-leg-lengthen-foot"
+                     and any(change["path"].endswith("/contact") and 139.9 < change["after"][0] < 140.1
+                             for change in edit["changed"]))
+    extended = tmp_path / "extended-feet"
+    extended_summary = generator.apply_edit(parent, extended, extension["id"], limit=1)
+    assert extended_summary["generated"], extended_summary["gates"]
+    parent = extended / extended_summary["generated"][0]["directory"]
+    motor_edit = next(edit for edit in generator.manual_edits(parent)["edits"]
+                      if edit["operation"] == "motor-layout"
+                      and any(change["path"].endswith("->shaft-4") for change in edit["changed"])
+                      and any(change["path"] == "hardware/motor/position" and change["after"][2] > 0
+                              for change in edit["changed"]))
+    rerooted = tmp_path / "rerooted-source"
+    rerooted_summary = generator.apply_edit(parent, rerooted, motor_edit["id"], limit=1)
+    assert rerooted_summary["generated"], rerooted_summary["gates"]
+    parent = rerooted / rerooted_summary["generated"][0]["directory"]
+    original = load_manifest(parent / "manifest.json")
+    output = tmp_path / "constructed"
+    summary = generator.build_native(parent, output)
+    assert summary["generated"], summary["gates"]
+    entry, = summary["generated"]
+    candidate = output / entry["directory"]
+    manifest = load_manifest(candidate / "manifest.json")
+    assert manifest["motion"]["mechanismId"] != original["motion"]["mechanismId"]
+    assert summary["mechanismId"] == manifest["motion"]["mechanismId"]
+    queued, _ = native_episode._queue(output)
+    assert queued == summary
+    assert summary["counts"]["dynamicTrials"] == 0
 
 
 def test_balance_model_uses_whole_robot_mass_and_support_bounds():

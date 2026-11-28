@@ -321,7 +321,8 @@ let buildWalker options =
         else [{Gate="motion-space";Outcome="pass";Code="stock-envelope-placement-constraints";
                Diagnostics=["Hardware and support routes selected outside reserved sampled motion; exact complete-assembly phase admission remains mandatory."]}]
     let summary = {|
-        schemaVersion=1;gateVersion=Realization.gateVersion;mechanismId=screened.MechanismId
+        schemaVersion=1;gateVersion=Realization.gateVersion
+        mechanismId=construction |> Option.map (fun built -> built.Screened.MechanismId) |> Option.defaultValue screened.MechanismId
         constructionVersion=WalkerConstruction.version;builderPolicyId=WalkerBuilder.policyId policy
         parentGenotypeId=baseline.GenotypeId;operation="construct-realization"
         changed=[{|path="construction";before=[baseline.GenotypeId];after=[WalkerConstruction.version;WalkerMotionSpace.version]|}]

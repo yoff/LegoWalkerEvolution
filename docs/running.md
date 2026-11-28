@@ -298,6 +298,8 @@ speed, torque and input clock do not change. The original layout remains availab
 zero motor placement tolerance or a non-unit input clock keeps the explicit fixed
 shaft and facing.
 Each selected layout has its own motion, geometry and support-planning caches.
+The construction batch identifies the exported mechanism, including any rerooting;
+the original motion remains the request's reference and parent provenance.
 
 When a joint pool's unsat core contains only the two motor support obligations,
 the current layout yields to unpenalized pending layouts immediately. The advice

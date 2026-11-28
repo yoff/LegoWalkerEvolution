@@ -289,6 +289,34 @@ pool. Such routes remain eligible for normal F# search and validation.
 Scaffold choice remains in the outer search; this step allocates the sockets of
 the selected scaffold rather than inventing new rails or intermediate anchors.
 
+Motor layout is selected before scaffold search. Flexible builds enumerate driven
+shafts at the same signed angular rate as the inherited motor and both axial
+facings, preferring shafts near the feet's horizontal center. This reuses the
+transmission rerooting rules; the motor phase is set from the solved initial pose,
+and the full reference-body phase-equivalence check remains mandatory. Electrical
+speed, torque and input clock do not change. The original layout remains available;
+zero motor placement tolerance or a non-unit input clock keeps the explicit fixed
+shaft and facing.
+Each selected layout has its own motion, geometry and support-planning caches.
+
+When a joint pool's unsat core contains only the two motor support obligations,
+the current layout yields to unpenalized pending layouts immediately. The advice
+names fixed layout decisions, not axle choices, and is checkpointed separately
+from exact nogoods. Its routes remain deferred and can still produce a witness
+after other layouts have been tried; no branch is pruned solely by this advice.
+Live snapshots report the number of scheduling advisories.
+Once a compatible joint assignment guides an available support production, its
+family receives the maximum bounded slice (128 states with the normal settings)
+to finish local bond/path verification. Motor-only blocked-pool advice can still
+yield immediately; compatible progress no longer loses its slice every 16 states.
+
+Construction-only probes of the original shaft-0 Trudge contribution selected
+shaft-4 with reversed motor facing at `(280, 0, -70)`. Two sequential runs produced
+identical witnesses in 39.6-40.0 seconds and 109 states, with one joint plan and no
+rejections. Exact proof replay and whole-assembly ground audits passed. These are
+local diagnostic timings, not a campaign performance guarantee or new dynamics
+qualification.
+
 Trudge is also a running **symbolic** example. After building the CLI, run:
 
 ```sh

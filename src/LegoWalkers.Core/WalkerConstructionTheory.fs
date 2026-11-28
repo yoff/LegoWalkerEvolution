@@ -4,10 +4,10 @@ open System
 open System.Collections.Generic
 
 module WalkerConstructionTheory =
-    let version = "walker-construction-theory-v34"
+    let version = "walker-construction-theory-v35"
     let familyStatesPerSlice = 16
     let familyKinds =
-        ["socket-preserving-scaffold";"link-and-connector-realization";"component-placement"
+        ["motor-shaft-and-facing";"socket-preserving-scaffold";"link-and-connector-realization";"component-placement"
          "required-drive-geometry";"motor-mount-motif"]
 
     type private Alternative<'a> = {
@@ -169,7 +169,8 @@ module WalkerConstructionTheory =
 
     let private goals (request: WalkerPackagingRequest) =
         let ground = request.Program.Bodies |> List.find _.Grounded |> _.Id
-        [goal "frame" "socket-preserving-scaffold" ground [] false
+        [goal "motor-layout" "motor-shaft-and-facing" "same signed-rate shafts and axial facing" [] false
+         goal "frame" "socket-preserving-scaffold" ground ["motor-layout"] false
          goal "walking" "link-and-connector-realization" "retained walking mechanism" ["frame"] false
          goal "targets" "component-placement" "battery,receiver,motor" ["frame";"walking"] false
          goal "drive" "required-drive-geometry" request.Drive.Root ["walking";"targets"] false]
@@ -329,6 +330,67 @@ module WalkerConstructionTheory =
             route.Drive.Gears |> List.sumBy (fun (_,gear) -> WalkerClearance.initialOverlapRisk motor gear),
             abs((route.Drive.Gears |> List.find (fun (body,_) -> body=route.Drive.Root) |> snd).Position.Z-root.Position.Z))
 
+    let motorLayoutOptions (request: WalkerPackagingRequest) =
+        let motor = request.Targets |> List.find (fun target -> target.Placement.Id=request.Source.MotorPart)
+        let fixedLayout = motor.ToleranceLdu=Vec3.zero || request.Drive.MotorClockScale<>1.0
+        if fixedLayout then [request] else
+        let screened = Realization.screen request.Program 72 |> Result.defaultWith (Realization.json >> invalidArg "motor-layout")
+        let ground = request.Program.Bodies |> List.find _.Grounded |> _.Id
+        let initial = screened.Frames.Head
+        let rec rate seen body =
+            if Set.contains body seen then None
+            elif body=request.Program.Motor.Body then Some 1.0
+            else request.Program.Transmissions |> List.tryFind (fun edge -> edge.Output=body)
+                 |> Option.bind (fun edge -> rate (Set.add body seen) edge.Input |> Option.map ((*) edge.Ratio))
+        let centerX = request.Program.Feet |> List.averageBy (fun foot ->
+            Motion.position screened.Graph initial foot.Port |> Result.defaultWith invalidOp |> _.X)
+        let _,removed = WalkerPackaging.scaffold request
+        let layouts =
+            request.Drive.Gears |> List.map fst |> List.distinct |> List.collect (fun body ->
+                let stock = request.Source.Bodies |> List.find (fun choice -> choice.Body=body) |> _.Parts
+                let free = stock |> List.forall (fun part ->
+                    (Catalog.gearTeeth part.Part).IsSome || List.contains part.Part ["3713.dat";"4265c.dat"])
+                let bearing = request.Program.Hinges |> List.exists (fun hinge ->
+                    Set.ofList [hinge.A.Body;hinge.B.Body]=Set.ofList [ground;body])
+                match rate Set.empty body,WalkerLayout.reroot request.Program body with
+                | Some speed,Some transmissions when abs(speed-1.0)<1e-9 && free && bearing ->
+                    [for face in [-1.0;1.0] do
+                        let pose = initial.Poses[body]
+                        let rotation = {X=Vec3.create face 0 0;Y=Vec3.create 0 1 0;Z=Vec3.create 0 0 face}
+                        let position = {pose.Origin with Z=if face>0.0 then 150.0 else -30.0}
+                        let placement = {motor.Placement with Position=position;Rotation=rotation}
+                        let program = {request.Program with
+                                            Motor={Body=body;Phase=pose.Angle}
+                                            Transmissions=transmissions}
+                        let sourceBodies = request.Source.Bodies |> List.map (fun choice ->
+                            let parts = choice.Parts |> List.map (fun part ->
+                                if part.Id=motor.Placement.Id then placement else part)
+                            {choice with Parts=parts})
+                        let source = {request.Source with MechanismId=Realization.mechanismId program;Bodies=sourceBodies}
+                        let balance = request.Balance |> Option.map (fun model ->
+                            let original = request.Source.Bodies |> List.collect _.Parts |> List.find (fun part -> part.Id=motor.Placement.Id)
+                            let masses = model.Components |> List.map (fun mass ->
+                                if mass.Part<>motor.Placement.Id then mass else
+                                let offset = Vec3.subtract mass.CenterLdu original.Position
+                                let local = Vec3.create (Vec3.dot offset original.Rotation.X)
+                                                        (Vec3.dot offset original.Rotation.Y) (Vec3.dot offset original.Rotation.Z)
+                                {mass with CenterLdu=Vec3.add position (Rotation.apply rotation local)})
+                            let before = model.Components |> List.find (fun mass -> mass.Part=motor.Placement.Id)
+                            let after = masses |> List.find (fun mass -> mass.Part=motor.Placement.Id)
+                            {model with Components=masses
+                                        CenterOfMassLdu=Vec3.add model.CenterOfMassLdu
+                                            (Vec3.scale (before.MassKg/model.TotalMassKg) (Vec3.subtract after.CenterLdu before.CenterLdu))})
+                        let targets = request.Targets |> List.map (fun target ->
+                            if target.Placement.Id=placement.Id then {target with Placement=placement} else target)
+                        yield {request with Program=program;Source=source;Balance=balance;Targets=targets
+                                            Drive={request.Drive with Root=body}
+                                            ObsoletePartIds=Set.union removed (Set.ofList request.ObsoletePartIds) |> Set.toList}]
+                | _ -> [])
+        let ranked = layouts |> List.sortBy (fun layout ->
+            let placed = layout.Targets |> List.find (fun target -> target.Placement.Id=motor.Placement.Id) |> _.Placement
+            abs(placed.Position.X-centerX),placed.Rotation.Z.Z)
+        ranked @ [request] |> List.distinct
+
     let start request oracleScope maximumStates maximumFrontier =
         WalkerPackaging.validate request |> Result.defaultWith (Realization.json >> invalidArg "request")
         ConstructionSearch.create (scope request oracleScope) (goals request) maximumStates maximumFrontier
@@ -432,7 +494,7 @@ module WalkerConstructionTheory =
 
     let motionTargetOptions request screened = motionTargetOptionsObserved None request screened
 
-    let expansionPlannedObserved (planner: ConstructionJointPlanner option) inspect (request: WalkerPackagingRequest) oracleScope =
+    let private expansionForLayout (planner: ConstructionJointPlanner option) inspect expectedScope rootGoals (request: WalkerPackagingRequest) =
         let mutable counterfactual = false
         let mutable counterfactualToken = System.Threading.CancellationToken.None
         let inspect = Some(
@@ -444,8 +506,6 @@ module WalkerConstructionTheory =
                         let entry: WalkerConstructionInspection = produce ()
                         if reducing then {entry with Goal="conflict-reduction";Rule="finite-axle-counterfactual"}
                         else entry)))
-        let expectedScope = scope request oracleScope
-        let rootGoals = goals request
         let reference = Realization.screen request.Reference 72 |> Result.defaultWith (Realization.json >> invalidArg "reference")
         let screened = Realization.screen request.Program 72 |> Result.defaultWith (Realization.json >> invalidArg "program")
         let frames = Motion.sample screened.Graph (reference.Frames |> List.map (fun f -> f.InputAngle*request.Drive.MotorClockScale))
@@ -514,7 +574,7 @@ module WalkerConstructionTheory =
                                 match repairsMemo.TryGetValue key with
                                 | true,genomes -> genomes
                                 | _ ->
-                                    let choices = WalkerConstruction.repairs reference frameSource hint 8 |> List.map _.Genome
+                                    let choices = WalkerConstruction.repairs screened frameSource hint 8 |> List.map _.Genome
                                     repairsMemo.Add(key,choices)
                                     choices)
                         let options =
@@ -565,9 +625,10 @@ module WalkerConstructionTheory =
                                 source,route)))
                     |> Result.bind (fun (source,route) ->
                         let mutable unresolved = None
-                        let mutable replayed = Set.ofList ["frame";"walking";"targets";"drive"]
+                        let mutable replayed = Set.ofList ["motor-layout";"frame";"walking";"targets";"drive"]
                         let mutable preferred: Map<string,string> = Map.empty
                         let mutable activeProblem = None
+                        let mutable motorAdvice = false
                         let planning =
                             if counterfactual then None
                             else planner |> Option.map (fun planner ->
@@ -616,7 +677,11 @@ module WalkerConstructionTheory =
                                              result
                                      match result with
                                      | JointPlanned assignments -> preferred <- Map.ofList assignments
-                                     | JointBlocked _ | JointInconclusive _ -> preferred <- Map.empty
+                                     | JointBlocked(goals,_) ->
+                                         preferred <- Map.empty
+                                         motorAdvice <- not goals.IsEmpty && (goals |> List.forall (fun goal ->
+                                             goal.StartsWith($"packaging-{request.Source.MotorPart}-")))
+                                     | JointInconclusive _ -> preferred <- Map.empty
                                      result})
                         let choose key rule bodies (alternatives: WalkerPlacement list list) =
                             if unresolved.IsSome then invalidOp "The realizer continued beyond an unresolved production."
@@ -652,6 +717,13 @@ module WalkerConstructionTheory =
                                         planner.Value.Report activeProblem.Value (JointInconclusive $"Planned route is outside the replayed domain for {key}; retaining regenerated alternatives.")
                                     unresolved <- Some(Branch(goal,choices))
                                 None
+                            | Error(Branch(goal,choices)) when motorAdvice ->
+                                let bindings = proof.Steps |> List.filter (fun step ->
+                                    List.contains step.Goal ["motor-layout";"frame";"walking";"targets";"drive";"motor-mount"])
+                                               |> List.map (fun step -> step.Goal,step.Choice)
+                                unresolved <- Some(AdvisedBranch(goal,choices,
+                                    {Bindings=bindings;Reason="bounded-motor-support-pool-blocked"}))
+                                None
                             | Error branch -> unresolved <- Some branch;None
                         let physicalSteps = proof.Steps |> List.filter (fun step ->
                             not(List.contains byGoal[step.Goal].Kind ["rigid-port-bonds";"rigid-path-to-frame"]))
@@ -682,7 +754,12 @@ module WalkerConstructionTheory =
                                     byGoal[step.Goal].Kind<>"mount-and-bearing"
                                     || step.Parts |> List.exists implicated.Contains)
                                 |> List.map (fun step -> step.Goal,step.Choice)
-                            Error(BlockedBy(gate,bindings))
+                            if motorAdvice then
+                                let layout = bindings |> List.filter (fun (goal,_) ->
+                                    List.contains goal ["motor-layout";"frame";"walking";"targets";"drive";"motor-mount"])
+                                Error(BlockedByAdvised(gate,bindings,
+                                    {Bindings=layout;Reason="bounded-motor-support-pool-blocked"}))
+                            else Error(BlockedBy(gate,bindings))
                         | None,Error gate -> Error(Blocked gate)
                         | None,Ok construction ->
                             if (physicalSteps |> List.map _.Goal |> Set.ofList)<>replayed then
@@ -792,6 +869,29 @@ module WalkerConstructionTheory =
                     let covered,checks = ConstructionSearch.minimizeCoveredConflict 256 reduced domains clauses
                     BlockedBy({gate with Diagnostics=gate.Diagnostics @ [$"covered-conflict-checks={checks}"]},covered)
             | _ -> outcome
+
+    let expansionPlannedObserved planner inspect request oracleScope =
+        let expectedScope = scope request oracleScope
+        let rootGoals = goals request
+        let layoutGoal = rootGoals |> List.find (fun goal -> goal.Id="motor-layout")
+        let alternatives = lazy (motorLayoutOptions request |> List.mapi (fun index layout ->
+            {Key=identity layout;Parts=[];Bodies=[];Cost=float index
+             Value=layout;Introduces=[];Bonds=[]}))
+        let expansions = Dictionary<string,ConstructionProof -> ConstructionNogood list -> ConstructionExpansion<WalkerPackagingConstruction>>()
+        fun (proof: ConstructionProof) nogoods ->
+            if proof.Scope<>expectedScope then invalidArg "checkpoint" "Construction request/oracle scope changed."
+            match resolve proof layoutGoal "same-signed-rate-motor-shaft-and-facing" alternatives.Value with
+            | Error branch -> branch
+            | Ok layout ->
+                let key = identity layout
+                let expand =
+                    match expansions.TryGetValue key with
+                    | true,expand -> expand
+                    | _ ->
+                        let expand = expansionForLayout planner inspect expectedScope rootGoals layout
+                        expansions.Add(key,expand)
+                        expand
+                expand proof nogoods
 
     let expansionObserved inspect request oracleScope = expansionPlannedObserved None inspect request oracleScope
     let expansion request oracleScope = expansionObserved None request oracleScope

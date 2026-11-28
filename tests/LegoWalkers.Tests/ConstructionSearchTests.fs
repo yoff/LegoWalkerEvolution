@@ -30,6 +30,59 @@ module ConstructionSearchTests =
               goal "brace" ["frame"] false;goal "oracle" [] true]
 
     [<Fact>]
+    let ``blocked pool scheduling advice yields without pruning and survives checkpoint replay`` () =
+        let state = seed [goal "layout" [] false;goal "support" ["layout"] false]
+        let mutable alternateChecked = false
+        let expand (proof: ConstructionProof) _ =
+            let values = proof.Steps |> List.map (fun step -> step.Goal,step.Choice) |> Map.ofList
+            if not(values.ContainsKey "layout") then
+                Branch("layout",[choice "layout" "a-blocked-pool" [] [] [] [];choice "layout" "z-alternate" [] [] [] []])
+            elif values["layout"]="z-alternate" then
+                alternateChecked <- true
+                Blocked {Gate="test";Outcome="reject";Code="alternate-tested";Diagnostics=[]}
+            elif not(values.ContainsKey "support") then
+                AdvisedBranch("support",[choice "support" "regenerated-witness" ["layout"] [] [] []],
+                    {Bindings=["layout","a-blocked-pool"];Reason="bounded-motor-support-pool-blocked"})
+            else
+                Assert.True alternateChecked
+                Built("retained-witness",proof)
+        let result,witness = ConstructionSearch.next expand state
+        Assert.True witness.IsSome
+        Assert.Equal(0,result.Pruned)
+        Assert.Single(result.Advisories) |> ignore
+        let options = JsonSerializerOptions(PropertyNamingPolicy=JsonNamingPolicy.CamelCase)
+        let restored = JsonSerializer.Deserialize<ConstructionSearchState>(JsonSerializer.Serialize(result,options),options)
+        Assert.Equal<ConstructionAdvisory list>(result.Advisories,restored.Advisories)
+
+    [<Fact>]
+    let ``blocked advice preserves exact conflict without pruning other supports in the advised layout`` () =
+        let state = seed [goal "layout" [] false;goal "support" ["layout"] false]
+        let mutable alternateChecked = false
+        let advice = {Bindings=["layout","a-blocked-pool"];Reason="bounded-motor-support-pool-blocked"}
+        let bindings = advice.Bindings @ ["support","a-rejected"]
+        let expand (proof: ConstructionProof) _ =
+            let values = proof.Steps |> List.map (fun step -> step.Goal,step.Choice) |> Map.ofList
+            if not(values.ContainsKey "layout") then
+                Branch("layout",[choice "layout" "a-blocked-pool" [] [] [] [];choice "layout" "z-alternate" [] [] [] []])
+            elif values["layout"]="z-alternate" then
+                alternateChecked <- true
+                Blocked {Gate="test";Outcome="reject";Code="alternate-tested";Diagnostics=[]}
+            elif not(values.ContainsKey "support") then
+                Branch("support",["a-rejected";"z-viable"] |> List.map (fun value ->
+                    choice "support" value ["layout"] [] [] []))
+            elif values["support"]="a-rejected" then
+                BlockedByAdvised({Gate="test";Outcome="reject";Code="support-conflict";Diagnostics=[]},bindings,advice)
+            else
+                Assert.True alternateChecked
+                Built("retained-layout-witness",proof)
+        let result,witness = ConstructionSearch.next expand state
+        Assert.True witness.IsSome
+        Assert.Equal(0,result.Pruned)
+        Assert.Equal<ConstructionAdvisory list>([advice],result.Advisories)
+        Assert.Equal<(string * string) list>(bindings,(Assert.Single result.Nogoods).Bindings)
+        Assert.True(result.Nogoods.Head.Feedback.Exact)
+
+    [<Fact>]
     let ``productions discharge open obligations and record prerequisites`` () =
         let proof = (seed [goal "a" [] false;goal "b" ["a"] false]).Frontier.Head
         Assert.Throws<ArgumentException>(fun () ->
@@ -221,6 +274,26 @@ module ConstructionSearchTests =
         let invalidCheck _ _ = Inconsistent ["frame","not-an-assumption"]
         Assert.Throws<ArgumentException>(fun () ->
             ConstructionSearch.nextObservedWithConstraints (Some invalidCheck) (fun _ _ _ -> ()) expand initial |> ignore) |> ignore
+
+    [<Fact>]
+    let ``compatible joint guidance gives a progressing family time to finish verification`` () =
+        let goals = goal "layout" [] false :: [for n in 1..5 -> goal $"support-{n}" ["layout"] false]
+        let initial = seed goals |> ConstructionSearch.withFamilyScheduling ["test"] 2
+        let expand (proof: ConstructionProof) _ =
+            match proof.Steps with
+            | [] -> Branch("layout",[choice "layout" "a-planned" [] [] [] [];choice "layout" "z-alternate" [] [] [] []])
+            | layout::_ when layout.Choice="z-alternate" ->
+                failwith "A compatible progressing plan was interrupted before its local verification."
+            | _ ->
+                match ConstructionSearch.openGoals proof with
+                | next::_ ->
+                    let selected = choice next.Id "compatible" ["layout"] [] [] []
+                    GuidedBranch(next.Id,[selected],"compatible")
+                | [] -> Built("verified-plan",proof)
+        let state,witness = ConstructionSearch.next expand initial
+        Assert.True witness.IsSome
+        Assert.Equal(7,state.Visited)
+        Assert.Equal(0,state.Pruned)
 
     [<Fact>]
     let ``joint guidance selects a preferred branch without changing immutable production cost`` () =

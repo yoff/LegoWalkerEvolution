@@ -38,6 +38,35 @@ module WalkerPackagingTests =
          ObsoletePartIds=removed;GroundClearance=None;FootConstructionGates=[];Balance=None}
 
     [<Fact>]
+    let ``motor layout choices reroot only same signed rate shafts and preserve solved gait`` () =
+        let program,genome = WalkerSeeds.fourBar 4
+        let unwrap result = result |> Result.defaultWith (Realization.json >> failwith)
+        let screened = Realization.screen program 72 |> unwrap
+        let request = WalkerPackaging.rebuildRequest screened genome
+        let layouts = WalkerConstructionTheory.motorLayoutOptions request
+        Assert.Contains(request,layouts)
+        Assert.True(layouts |> List.exists (fun layout -> layout.Drive.Root<>request.Drive.Root))
+        Assert.Contains(layouts,fun layout ->
+            (layout.Targets |> List.find (fun target -> target.Placement.Id=genome.MotorPart)).Placement.Rotation.Z.Z<0.0)
+        for layout in layouts do
+            Assert.Equal(request.Reference,layout.Reference)
+            Assert.Equal(request.Source.Speed,layout.Source.Speed)
+            Assert.Equal(request.Source.MaxTorque,layout.Source.MaxTorque)
+            Assert.Equal(1.0,layout.Drive.MotorClockScale)
+            Assert.Equal(Realization.mechanismId layout.Program,layout.Source.MechanismId)
+            let solved = Realization.screen layout.Program 72 |> unwrap
+            for before,after in List.zip screened.Frames solved.Frames do
+                for body in program.Bodies do
+                    Assert.True(Vec3.distance before.Poses[body.Id].Origin after.Poses[body.Id].Origin<1e-5)
+                    let delta = before.Poses[body.Id].Angle-after.Poses[body.Id].Angle
+                    Assert.True(abs(atan2 (sin delta) (cos delta))<1e-6)
+        let targets = request.Targets |> List.map (fun target -> {target with ToleranceLdu=Vec3.zero})
+        let pinned = {request with Targets=targets}
+        Assert.Equal<WalkerPackagingRequest list>([pinned],WalkerConstructionTheory.motorLayoutOptions pinned)
+        let gearedClock = {request with Drive={request.Drive with MotorClockScale=0.5}}
+        Assert.Equal<WalkerPackagingRequest list>([gearedClock],WalkerConstructionTheory.motorLayoutOptions gearedClock)
+
+    [<Fact>]
     let ``compatibility propagation regenerates blocked truncated pools but reuses surviving routes`` () =
         let pin id x = {Id=id;Part="4459.dat";Color=8;Position=Vec3.create x 0 0
                         Rotation={X=Vec3.create 0 0 1;Y=Vec3.create 1 0 0;Z=Vec3.create 0 1 0}}
@@ -370,7 +399,7 @@ module WalkerPackagingTests =
         let initial = WalkerConstructionTheory.start request "centered-motor" 512 64
         let expand = WalkerConstructionTheory.expansion request "centered-motor"
         let mutable proof = initial.Frontier.Head
-        for expected in ["frame";"walking";"targets";"drive"] do
+        for expected in ["motor-layout";"frame";"walking";"targets";"drive"] do
             match expand proof [] with
             | Branch(goal,choices) ->
                 Assert.Equal(expected,goal)

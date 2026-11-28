@@ -12,10 +12,10 @@ from .mass_layout import mass_layout_gate
 from .payload import load_profile
 
 POLICY = {
-    "version": "motion-first-carry-forward-v6",
+    "version": "motion-first-carry-forward-v7",
     "samples": 96, "groundClearanceLdu": 8,
     "packagingVersion": "packaging-realization-v29",
-    "theoryVersion": "walker-construction-theory-v34",
+    "theoryVersion": "walker-construction-theory-v35",
     "constraintSolver": "z3-finite-construction-v2; required and frozen with the campaign compiler",
     "footClearance": "Validated one/two-plate stacks on aligned 3701 ankle bricks use nonpenetration checks; all other non-contact parts retain the requested margin.",
     "scaffold": "Bounded backbone relocations with stock routes to retained walking interfaces; original frame remains an alternative. Exact whole-chassis connectivity remains mandatory.",
@@ -23,7 +23,8 @@ POLICY = {
     "maximumBuildAttempts": 4, "plateLayers": [1, 2],
     "preserves": "Reference walking motion and electrical control; old physical stock is realization advice.",
     "placement": "Try estimated CoM centering at fixed leg mounts, then inherited placement preferences; all new routes remain mandatory.",
-    "motorPlacement": "Try housing-centered and bounded inward/outward axial positions with compatible input-mesh planes; retain the nominal placement as a search alternative.",
+    "motorPlacement": "Choose same signed-rate driven shafts and both axial facings before scaffold search, then try housing-centered and bounded axial placements. Retain the inherited root/facing; fixed zero-tolerance layouts do not reroot.",
+    "motorSupportAdvice": "Blocked motor-only joint pools yield to other layouts; retain deferred routes because an initial bounded pool is not a proof of physical impossibility.",
     "balance": "Rank joint hardware layouts by normalized estimated whole-robot horizontal COM offset before routing. Correct battery placement for each motor/receiver alternative; source mass and swept-foot bounds are heuristic, never qualification.",
     "deduplication": "Effective request identities include the full request and frozen theory/oracle scope; an identical request is never searched twice within an obligation.",
     "inertia": "Estimated diagnostics, not a universal smaller/larger reward.",

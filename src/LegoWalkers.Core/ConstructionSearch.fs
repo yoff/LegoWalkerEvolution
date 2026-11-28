@@ -73,6 +73,8 @@ type ConstructionDomain = {
     Choices: string list
 }
 
+type ConstructionAdvisory = { Bindings: (string * string) list; Reason: string }
+
 type ConstructionConstraintVerdict =
     | Consistent
     | Inconsistent of bindings: (string * string) list
@@ -87,6 +89,7 @@ type ConstructionSearchState = {
     ConstraintChecks: int
     ConstraintPruned: int
     ConstraintWarnings: string list
+    Advisories: ConstructionAdvisory list
     Nogoods: ConstructionNogood list
     Refresh: ConstructionProof list
     SeenNodes: string list
@@ -104,12 +107,14 @@ type ConstructionSearchState = {
 type ConstructionExpansion<'witness> =
     | Branch of goal: string * choices: ConstructionChoice list
     | GuidedBranch of goal: string * choices: ConstructionChoice list * preferred: string
+    | AdvisedBranch of goal: string * choices: ConstructionChoice list * advisory: ConstructionAdvisory
     | Built of identity: string * witness: 'witness
     | Blocked of GateDecision
     | BlockedBy of gate: GateDecision * bindings: (string * string) list
+    | BlockedByAdvised of gate: GateDecision * bindings: (string * string) list * advisory: ConstructionAdvisory
 
 module ConstructionSearch =
-    let version = "obligation-search-v11"
+    let version = "obligation-search-v12"
     let private require condition message = if not condition then invalidArg "construction-proof" message
     let private nonempty (text: string) = not(String.IsNullOrWhiteSpace text)
     let private distinct items = List.length items=(Set.ofList items).Count
@@ -224,7 +229,7 @@ module ConstructionSearch =
                 "Search bounds must be within 1..16384 states and 1..1024 frontier nodes."
         let proof = validate {Scope=scope;Goals=goals;Steps=[]}
         {Scope=scope;Frontier=[proof];Deferred=[];Schedule=None
-         Domains=[];ConstraintChecks=0;ConstraintPruned=0;ConstraintWarnings=[]
+         Domains=[];ConstraintChecks=0;ConstraintPruned=0;ConstraintWarnings=[];Advisories=[]
          Nogoods=[];Refresh=[];SeenNodes=[];SeenWitnesses=[];Pending=None
          Visited=0;Pruned=0;Discarded=0;MaximumStates=maximumStates;MaximumFrontier=maximumFrontier
          Status="searching";Rejections=[]}
@@ -265,6 +270,18 @@ module ConstructionSearch =
                                                 Schedule=Some {schedule with SliceVisited=0;SliceLimit=limit}}
         | _ when state.Frontier.IsEmpty -> bounded [] state
         | _ -> state
+
+    let private selectAdvisory state =
+        if state.Advisories.IsEmpty then state else
+        let penalty (proof: ConstructionProof) =
+            let values = proof.Steps |> List.map (fun step -> step.Goal,step.Choice) |> Map.ofList
+            state.Advisories |> List.filter (fun advisory ->
+                advisory.Bindings |> List.forall (fun (goal,choice) -> Map.tryFind goal values=Some choice)) |> List.length
+        let pending = state.Frontier @ state.Deferred
+        let selected = pending |> List.minBy penalty
+        if nodeId selected=nodeId state.Frontier.Head then state else
+        let key = nodeId selected
+        bounded (selected::(pending |> List.filter (fun proof -> nodeId proof<>key))) {state with Deferred=[]}
 
     let private recordFamilyVisit proof state =
         match state.Schedule with
@@ -369,7 +386,7 @@ module ConstructionSearch =
                     let prefix = {rejected with Steps=steps;Goals=goals}
                     state <- {state with Visited=state.Visited+1}
                     match expand prefix feedback with
-                    | Branch(goal,choices) | GuidedBranch(goal,choices,_) when goal=step.Goal ->
+                    | Branch(goal,choices) | GuidedBranch(goal,choices,_) | AdvisedBranch(goal,choices,_) when goal=step.Goal ->
                         state <- withDomain prefix goal choices state
                         for choice in choices |> List.sortBy (fun c -> c.Step.Cost,c.Step.Choice) do
                             if choice.Step.Choice<>step.Choice then
@@ -385,6 +402,7 @@ module ConstructionSearch =
         let mutable result = None
         while result.IsNone && not(state.Frontier.IsEmpty && state.Deferred.IsEmpty) && state.Visited<state.MaximumStates do
             state <- selectSlice state
+            state <- selectAdvisory state
             let proof = state.Frontier.Head
             require (proof.Scope=state.Scope) "Frontier proof scope differs from the search."
             state <- {state with Frontier=state.Frontier.Tail}
@@ -419,6 +437,16 @@ module ConstructionSearch =
                 observe state proof None
                 let expansion = expand proof state.Nogoods
                 observe state proof (Some expansion)
+                let recordAdvice advisory =
+                    let values = proof.Steps |> List.map (fun step -> step.Goal,step.Choice) |> Map.ofList
+                    require (nonempty advisory.Reason && not advisory.Bindings.IsEmpty && distinct advisory.Bindings
+                             && (advisory.Bindings |> List.forall (fun (goal,choice) -> Map.tryFind goal values=Some choice)))
+                            "Scheduling advice must explain selected proof bindings."
+                    state <- {state with Advisories=List.distinct(state.Advisories @ [advisory])}
+                let expansion =
+                    match expansion with
+                    | BlockedByAdvised(gate,bindings,advisory) -> recordAdvice advisory;BlockedBy(gate,bindings)
+                    | other -> other
                 match expansion with
                 | Blocked gate ->
                     require (gate.Outcome="reject") "A blocked production must return an explicit rejection."
@@ -435,12 +463,18 @@ module ConstructionSearch =
                     let nogood = {Feedback=feedback;Bindings=bindings;Targets=bindings |> List.map fst;Focus=[]}
                     state <- {state with Nogoods=(state.Nogoods @ [nogood] |> List.distinct)
                                          Rejections=state.Rejections @ [gate]}
-                | Branch(goal,choices) | GuidedBranch(goal,choices,_) ->
+                | Branch(goal,choices) | GuidedBranch(goal,choices,_) | AdvisedBranch(goal,choices,_) ->
                     state <- withDomain proof goal choices state
+                    match expansion with
+                    | AdvisedBranch(_,_,advisory) -> recordAdvice advisory
+                    | _ -> ()
                     let preferred =
                         match expansion with
                         | GuidedBranch(_,_,value) ->
                             require (choices |> List.exists (fun choice -> choice.Step.Choice=value)) "A guided branch must prefer an available choice."
+                            let schedule = state.Schedule |> Option.map (fun schedule ->
+                                {schedule with SliceLimit=schedule.StatesPerSlice*8})
+                            state <- {state with Schedule=schedule}
                             Some value
                         | _ -> None
                     if choices.IsEmpty then
@@ -458,6 +492,7 @@ module ConstructionSearch =
                     else
                         state <- {state with Pending=Some proof;SeenWitnesses=identity::state.SeenWitnesses;Status="awaiting-oracle"}
                         result <- Some witness
+                | BlockedByAdvised _ -> invalidOp "Scheduling advice was not normalized."
         if result.IsNone then
             let status =
                 if state.Frontier.IsEmpty && state.Deferred.IsEmpty then

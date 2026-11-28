@@ -18,7 +18,7 @@ from .leg_family_migration import POLICY as LEG_FAMILY_MIGRATION
 from .motion_carry import POLICY as MOTION_CARRY_POLICY, construction_task, current_pending, ensure_pending, source_candidate
 
 POLICY = {
-    "version": "native-discovery-v41", "mutationVersion": "native-motion-mutations-v23",
+    "version": "native-discovery-v42", "mutationVersion": "native-motion-mutations-v23",
     "motionCarryForward": MOTION_CARRY_POLICY,
     "physicalDeduplication": "assembly-and-controller-v1; polarity and torque limit distinguish trials",
     "polarityFeedback": {"version": "safe-backward-gait-repair-v1", "maximumAttemptsPerBirth": 1,
@@ -78,11 +78,11 @@ POLICY = {
     "construction": {"version": "technic-construction-v11",
                      "motionFirstBuilder": {
                          "version": "sampled-motion-ground-reservation-v3",
-                         "theoryVersion": "walker-construction-theory-v34",
+                         "theoryVersion": "walker-construction-theory-v35",
                          "packagingVersion": "packaging-realization-v29",
                          "scaffold": "Search backbone relocations and stock reconnections to retained walking sockets; original chassis remains an alternative.",
                          "balance": "Prefer joint motor/battery/receiver layouts with smaller normalized source-mass COM offsets from swept-foot bounds before support routing; not dynamic qualification.",
-                         "motorPlacement": "Coupled housing-centered/inward/outward axial placement and input-mesh plane routing; up to nine motor placements with one target assignment reserved per feasible placement.",
+                         "motorPlacement": "Same signed-rate shaft and axial facing choices precede scaffold search; retain inherited layout and preserve the reference gait and electrical control.",
                          "motorMountMotifs": ["front-forward", "front-rearward", "rear-saddle"],
                          "fixedHardware": "Support parts must also clear fixed motor/payload stock envelopes; coaxial connector engagement remains permitted.",
                          "routing": "Reject unsafe bridge extensions before recursing, so obstructed prefixes cannot consume the complete-route candidate cap.",

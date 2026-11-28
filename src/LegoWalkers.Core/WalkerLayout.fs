@@ -132,7 +132,7 @@ module WalkerLayout =
                         yield! edits |> List.truncate 12
     ]
 
-    let private reroot (program: MotionProgram) root =
+    let internal reroot (program: MotionProgram) root =
         let rec visit visited todo edges =
             match todo with
             | [] -> if List.length edges = program.Transmissions.Length then Some edges else None

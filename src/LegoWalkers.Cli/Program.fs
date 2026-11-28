@@ -207,6 +207,7 @@ let buildWalker options =
                          deferred=observedState.Deferred.Length
                          constraintChecks=observedState.ConstraintChecks;constraintPruned=observedState.ConstraintPruned
                          constraintWarnings=observedState.ConstraintWarnings
+                         schedulingAdvisories=observedState.Advisories.Length
                          jointCalls=jointCalls;jointModels=jointModels;jointBlocked=jointBlocked
                          jointInconclusive=jointInconclusive;jointRejectedRoutes=jointRejectedRoutes
                          learnedConflicts=observedState.Nogoods.Length|}
@@ -237,12 +238,14 @@ let buildWalker options =
                 |> Option.defaultValue "Verifying the locally constructed witness."
             | Some(Branch(goal,choices)) -> $"{goal}: {choices.Length} applicable productions."
             | Some(GuidedBranch(goal,choices,_)) -> $"{goal}: {choices.Length} productions; prioritizing the joint support plan."
+            | Some(AdvisedBranch(goal,choices,advisory)) -> $"{goal}: {choices.Length} productions retained; yielding layout ({advisory.Reason})."
             | Some(Blocked gate) -> gate.Code+": "+String.concat "; " gate.Diagnostics
             | Some(BlockedBy(gate,_)) -> gate.Code+": "+String.concat "; " gate.Diagnostics
+            | Some(BlockedByAdvised(gate,_,advisory)) -> gate.Code+": yielding layout ("+advisory.Reason+")."
             | Some(Built _) -> "Local construction witness found; external admission is still required."
         match outcome with
-        | Some(Blocked gate) | Some(BlockedBy(gate,_)) ->
-            let bindings = match outcome with Some(BlockedBy(_,bindings)) -> bindings | _ -> []
+        | Some(Blocked gate) | Some(BlockedBy(gate,_)) | Some(BlockedByAdvised(gate,_,_)) ->
+            let bindings = match outcome with Some(BlockedBy(_,bindings)) | Some(BlockedByAdvised(_,bindings,_)) -> bindings | _ -> []
             let event = {|
                 eventType="rejection";updated=DateTimeOffset.UtcNow.ToString("O")
                 elapsedSeconds=timer.Elapsed.TotalSeconds;status=state.Status;detail=detail
